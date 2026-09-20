@@ -1,0 +1,16 @@
+{
+  "name": "chrollo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Repository security review workspace for HackSpire",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node --watch server/app.js",
+    "start": "node server/app.js",
+    "test": "node --test",
+    "check": "node --check server/app.js && node --check server/scanners.js && node --check dist/app.js"
+  }
+}

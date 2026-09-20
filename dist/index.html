@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Chrollo reviews repository security findings and helps developers verify fixes." />
+    <title>Chrollo</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23111827'/%3E%3Cpath d='M18 17h29v8H26v14h21v8H18z' fill='white'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="Chrollo home">
+        <span class="brand-mark" aria-hidden="true">C</span>
+        <strong>Chrollo</strong>
+      </a>
+      <div class="header-meta">
+        <span>Phantom Troupe</span>
+        <span class="demo-label" id="mode-label">Connecting</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="page-intro">
+        <div>
+          <h1>Repository security review</h1>
+          <p>Scan an authorized public JavaScript or Node.js repository. Chrollo reads the code without running it.</p>
+        </div>
+        <form id="scan-form" class="repo-form">
+          <label for="repo-url">Repository URL</label>
+          <div class="input-row">
+            <input id="repo-url" name="repo" type="url" value="https://github.com/OWASP/NodeGoat" autocomplete="url" required />
+            <button class="primary-button" type="submit">Run scan</button>
+          </div>
+          <p id="form-message" class="form-message" role="status">Checking the local scan service…</p>
+        </form>
+      </section>
+
+      <section id="progress-panel" class="progress-panel" aria-label="Scan progress">
+        <div class="progress-header">
+          <span id="progress-label">Ready to scan</span>
+          <strong id="progress-percent">0%</strong>
+        </div>
+        <div class="progress-track"><span id="progress-bar"></span></div>
+        <ol class="pipeline" aria-label="Audit workflow">
+          <li class="pipeline-step" data-step="import"><span>1</span><div><b>Import</b><small>Repository snapshot</small></div></li>
+          <li class="pipeline-step" data-step="scan"><span>2</span><div><b>Scan</b><small>Code and packages</small></div></li>
+          <li class="pipeline-step" data-step="normalize"><span>3</span><div><b>Normalize</b><small>Evidence and severity</small></div></li>
+          <li class="pipeline-step" data-step="review"><span>4</span><div><b>Review</b><small>Explanation and patch</small></div></li>
+          <li class="pipeline-step" data-step="verify"><span>5</span><div><b>Verify</b><small>Rescan result</small></div></li>
+        </ol>
+      </section>
+
+      <section id="workspace" class="workspace" aria-label="Security findings workspace">
+        <aside class="summary-panel">
+          <div class="summary-title">
+            <div>
+              <span class="section-label">Repository</span>
+              <h2>OWASP / NodeGoat</h2>
+            </div>
+            <span class="risk-badge">High risk</span>
+          </div>
+          <div class="score-wrap">
+            <strong id="score">42</strong>
+            <span>Security score<br />out of 100</span>
+          </div>
+          <dl class="metrics">
+            <div><dt>Open</dt><dd id="open-count">5</dd></div>
+            <div><dt>Critical</dt><dd id="critical-count">1</dd></div>
+            <div><dt>Resolved</dt><dd id="resolved-count">0</dd></div>
+            <div><dt>Scan time</dt><dd>38s</dd></div>
+          </dl>
+          <div class="scanner-list">
+            <h3>Scanners</h3>
+            <div><span>Semgrep</span><strong>3 findings</strong></div>
+            <div><span>OSV-Scanner</span><strong>1 finding</strong></div>
+            <div><span>Gitleaks</span><strong>1 finding</strong></div>
+          </div>
+        </aside>
+
+        <section class="findings-panel">
+          <div class="findings-heading">
+            <div>
+              <span class="section-label">Results</span>
+              <h2>Findings</h2>
+            </div>
+            <div class="filters" role="group" aria-label="Filter findings">
+              <button class="filter active" data-filter="all">All <span>5</span></button>
+              <button class="filter" data-filter="critical">Critical</button>
+              <button class="filter" data-filter="high">High</button>
+              <button class="filter" data-filter="resolved">Resolved</button>
+            </div>
+          </div>
+          <div id="findings-list" class="findings-list"></div>
+        </section>
+
+        <aside id="detail-panel" class="detail-panel" aria-live="polite"></aside>
+      </section>
+    </main>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

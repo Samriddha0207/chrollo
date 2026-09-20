@@ -1,0 +1,5 @@
+.sites-runtime/
+*.log
+data/
+.env
+test-data*/
