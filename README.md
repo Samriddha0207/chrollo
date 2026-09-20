@@ -11,6 +11,11 @@ Chrollo is a repository security review workspace built by **Phantom Troupe** fo
 - Normalized severity, evidence, remediation and scoring
 - Persistent scan history in a local JSON store
 - Approve/dismiss review decisions
+- Severity, scanner and security-score charts
+- Baseline-versus-rescan comparisons
+- JSON and GitHub-compatible SARIF exports
+- Optional Semgrep, Gitleaks and OSV-Scanner adapters
+- Per-client API rate limiting
 - Optional Gemini explanations when a key is explicitly configured
 - Static demo fallback when the UI is opened without the Node service
 - Responsive review UI and WebMCP finding lookup
@@ -38,6 +43,16 @@ For development with automatic restart:
 npm run dev
 ```
 
+## Optional production scanners
+
+Install Semgrep, Gitleaks and OSV-Scanner on the host, then set:
+
+```text
+CHROLLO_EXTERNAL_SCANNERS=true
+```
+
+Chrollo runs available tools without executing repository code and merges their results with the built-in scanners. Missing tools are skipped, so the application remains usable during the hackathon.
+
 ## Optional Gemini explanations
 
 Copy `.env.example` to `.env`, set `GEMINI_API_KEY`, then load those variables before starting the process. Evidence is sent to Gemini only when the key is configured and the reviewer clicks **Explain with AI**.
@@ -57,6 +72,8 @@ npm test
 | `GET` | `/api/scans` | Recent scan summaries |
 | `POST` | `/api/scans` | Scan `{ "repositoryUrl": "https://github.com/owner/repo" }` |
 | `GET` | `/api/scans/:id` | Full normalized scan |
+| `GET` | `/api/scans/:id?format=json` | Download a JSON report |
+| `GET` | `/api/scans/:id?format=sarif` | Download a SARIF 2.1 report |
 | `POST` | `/api/scans/:id/rescan` | Clone and scan the repository again |
 | `POST` | `/api/scans/:id/findings/:findingId/decision` | Approve or reject a recommendation |
 | `POST` | `/api/scans/:id/findings/:findingId/explain` | Request an optional Gemini explanation |

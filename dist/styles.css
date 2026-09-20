@@ -54,6 +54,34 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(36,87,214,
 .pipeline-step.active, .pipeline-step.complete { color: var(--text); }
 .pipeline-step.active span { border-color: var(--accent); background: var(--accent); color: white; }
 .pipeline-step.complete span { border-color: #95d5c6; background: #eaf8f4; color: var(--success); }
+.results-overview { margin-bottom: 16px; padding: 18px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.overview-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+.overview-heading h2 { margin: 0; font-size: 19px; letter-spacing: -.02em; }
+.overview-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.secondary-button { min-height: 34px; display: inline-flex; align-items: center; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: #344054; font-size: 12px; font-weight: 700; text-decoration: none; }
+.secondary-button:hover { background: var(--surface-muted); }
+.secondary-button:disabled, .secondary-button[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+.chart-grid { display: grid; grid-template-columns: .9fr .9fr 1.2fr; gap: 22px; }
+.chart-panel { min-width: 0; margin: 0; padding: 0; }
+.chart-panel figcaption { margin-bottom: 13px; color: #475467; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .055em; }
+.bar-chart { display: grid; gap: 9px; }
+.bar-row { display: grid; grid-template-columns: 82px minmax(70px, 1fr) 28px; align-items: center; gap: 9px; color: var(--muted); font-size: 12px; }
+.bar-row > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.bar-track { height: 9px; overflow: hidden; border-radius: 2px; background: #edf0f3; }
+.bar-fill { height: 100%; min-width: 0; border-radius: 2px; background: var(--accent); }
+.bar-fill.critical { background: var(--critical); }
+.bar-fill.high { background: var(--high); }
+.bar-fill.medium { background: var(--medium); }
+.bar-fill.low { background: #667085; }
+.bar-row strong { color: var(--text); text-align: right; font-size: 12px; }
+.trend-panel svg { width: 100%; min-height: 142px; overflow: visible; }
+.chart-axis { stroke: var(--border-strong); stroke-width: 1; }
+.chart-gridline { stroke: var(--border); stroke-width: 1; }
+.chart-line { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+.chart-point { fill: var(--surface); stroke: var(--accent); stroke-width: 3; }
+.chart-label { fill: var(--muted); font: 11px Inter, ui-sans-serif, system-ui, sans-serif; }
+.chart-value { fill: var(--text); font: 700 11px Inter, ui-sans-serif, system-ui, sans-serif; }
+.comparison-summary { min-height: 18px; margin: 14px 0 0; color: var(--muted); font-size: 12px; }
 .workspace { display: grid; grid-template-columns: 220px minmax(390px, 1fr) minmax(350px, 430px); gap: 12px; align-items: start; }
 .summary-panel, .findings-panel, .detail-panel { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
 .summary-panel, .detail-panel { padding: 18px; }
@@ -118,6 +146,8 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(36,87,214,
   .page-intro { grid-template-columns: 1fr; gap: 20px; }
   .workspace { grid-template-columns: 210px 1fr; }
   .detail-panel { grid-column: 1 / -1; min-height: auto; }
+  .chart-grid { grid-template-columns: 1fr 1fr; }
+  .trend-panel { grid-column: 1 / -1; }
 }
 @media (max-width: 720px) {
   .topbar { padding: 0 16px; }
@@ -127,6 +157,10 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(36,87,214,
   .primary-button { width: 100%; }
   .pipeline { grid-template-columns: 1fr; gap: 8px; }
   .pipeline-step small { white-space: normal; }
+  .overview-heading { display: block; }
+  .overview-actions { justify-content: flex-start; margin-top: 12px; }
+  .chart-grid { grid-template-columns: 1fr; }
+  .trend-panel { grid-column: auto; }
   .workspace { grid-template-columns: 1fr; }
   .findings-heading { display: block; }
   .filters { justify-content: flex-start; margin-top: 12px; }

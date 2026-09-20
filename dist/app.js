@@ -28,6 +28,7 @@ let currentScanId = null;
 let backendAvailable = false;
 let repositoryName = "OWASP / NodeGoat";
 let currentSummary = demoSummary();
+let scanHistory = [];
 
 const list = document.querySelector("#findings-list");
 const detail = document.querySelector("#detail-panel");
@@ -102,6 +103,65 @@ function updateMetrics() {
   document.querySelector(".scanner-list").innerHTML = `<h3>Scan coverage</h3>
     <div><span>Files scanned</span><strong>${Number(currentSummary.filesScanned || 0).toLocaleString()}</strong></div>
     ${(currentSummary.scanners || []).map((name) => `<div><span>${escapeHtml(name)}</span><strong>${findings.filter((item) => item.tool === name).length} findings</strong></div>`).join("")}`;
+  const rescanButton = document.querySelector("#rescan-button");
+  const jsonExport = document.querySelector("#json-export");
+  const sarifExport = document.querySelector("#sarif-export");
+  rescanButton.disabled = !backendAvailable || !currentScanId;
+  for (const [link, format] of [[jsonExport, "json"], [sarifExport, "sarif"]]) {
+    link.href = currentScanId ? `/api/scans/${encodeURIComponent(currentScanId)}?format=${format}` : "#";
+    link.setAttribute("aria-disabled", currentScanId ? "false" : "true");
+  }
+  renderCharts();
+}
+
+function chartRows(items, classByName = false) {
+  const maximum = Math.max(1, ...items.map((item) => item.value));
+  return items.map((item) => `
+    <div class="bar-row">
+      <span>${escapeHtml(item.label)}</span>
+      <div class="bar-track" aria-hidden="true"><div class="bar-fill ${classByName ? escapeHtml(item.label.toLowerCase()) : ""}" style="width:${Math.round(item.value / maximum * 100)}%"></div></div>
+      <strong>${item.value}</strong>
+    </div>`).join("");
+}
+
+function renderCharts() {
+  const severityOrder = ["critical", "high", "medium", "low"];
+  const severityItems = severityOrder.map((level) => ({ label: level, value: findings.filter((item) => item.severity === level && item.status === "open").length }));
+  const scannerCounts = findings.reduce((counts, item) => counts.set(item.tool, (counts.get(item.tool) || 0) + 1), new Map());
+  const scannerItems = [...scannerCounts].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+  document.querySelector("#severity-chart").innerHTML = chartRows(severityItems, true);
+  document.querySelector("#scanner-chart").innerHTML = chartRows(scannerItems.length ? scannerItems : [{ label: "No findings", value: 0 }]);
+
+  const history = (scanHistory.length ? [...scanHistory].reverse().slice(-10) : [{ summary: currentSummary }]);
+  const width = 520, height = 160, left = 36, right = 14, top = 16, bottom = 28;
+  const usableWidth = width - left - right, usableHeight = height - top - bottom;
+  const points = history.map((scan, index) => ({
+    score: Number(scan.summary?.score ?? 0),
+    x: left + (history.length === 1 ? usableWidth / 2 : index * usableWidth / (history.length - 1)),
+    y: top + (100 - Number(scan.summary?.score ?? 0)) / 100 * usableHeight,
+  }));
+  const grid = [0, 50, 100].map((score) => {
+    const y = top + (100 - score) / 100 * usableHeight;
+    return `<line class="chart-gridline" x1="${left}" y1="${y}" x2="${width - right}" y2="${y}"/><text class="chart-label" x="${left - 8}" y="${y + 4}" text-anchor="end">${score}</text>`;
+  }).join("");
+  const polyline = points.map((point) => `${point.x},${point.y}`).join(" ");
+  const marks = points.map((point, index) => `<circle class="chart-point" cx="${point.x}" cy="${point.y}" r="4"><title>Scan ${index + 1}: score ${point.score}</title></circle>`).join("");
+  const final = points.at(-1);
+  document.querySelector("#score-chart").innerHTML = `
+    <title id="score-chart-title">Security score trend</title><desc id="score-chart-description">Recent scan scores from zero to one hundred.</desc>
+    ${grid}<line class="chart-axis" x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"/>
+    <polyline class="chart-line" points="${polyline}"/>${marks}
+    <text class="chart-value" x="${Math.min(width - right - 4, final.x + 8)}" y="${Math.max(top + 10, final.y - 8)}" text-anchor="${final.x > width - 70 ? "end" : "start"}">${final.score}/100</text>
+    <text class="chart-label" x="${left}" y="${height - 8}">Older</text><text class="chart-label" x="${width - right}" y="${height - 8}" text-anchor="end">Latest</text>`;
+}
+
+async function loadHistory() {
+  if (!backendAvailable) { scanHistory = []; renderCharts(); return; }
+  try {
+    const response = await fetch("/api/scans");
+    scanHistory = response.ok ? await response.json() : [];
+  } catch { scanHistory = []; }
+  renderCharts();
 }
 
 function setProgress(percent, label, phaseIndex) {
@@ -135,12 +195,16 @@ async function runScan(repository) {
       currentSummary = payload.summary;
       repositoryName = `${payload.repository.owner} / ${payload.repository.name}`;
       currentScanId = payload.id;
+      document.querySelector("#comparison-summary").textContent = payload.comparison
+        ? `${payload.comparison.fixedFindings} fixed · ${payload.comparison.newFindings} new · ${payload.comparison.unchangedFindings} unchanged · score ${payload.comparison.scoreChange >= 0 ? "+" : ""}${payload.comparison.scoreChange}`
+        : "Baseline scan saved. Rescan after remediation to compare the results.";
     }
     selectedId = findings[0]?.id ?? null;
     activeFilter = "all";
     document.querySelectorAll(".filter").forEach((button) => button.classList.toggle("active", button.dataset.filter === "all"));
     setProgress(100, findings.length ? "Audit complete. Findings are ready for review" : "Audit complete. No matching findings found", 4);
     document.querySelector("#form-message").textContent = backendAvailable ? `Completed scan ${currentScanId}. The clone was deleted after analysis.` : "Showing representative results. Run npm start for real scans.";
+    await loadHistory();
     renderFindings(); renderDetail(); updateMetrics();
     showToast(`Audit complete: ${findings.length} finding${findings.length === 1 ? "" : "s"}.`);
   } catch (error) {
@@ -187,6 +251,30 @@ async function explainFinding(id) {
   } catch (error) { showToast(error.message, true); renderDetail(); }
 }
 
+async function rescanRepository() {
+  if (!currentScanId) return;
+  const button = document.querySelector("#rescan-button");
+  button.disabled = true;
+  button.textContent = "Rescanning…";
+  setProgress(35, "Creating a fresh repository snapshot", 1);
+  try {
+    const response = await fetch(`/api/scans/${encodeURIComponent(currentScanId)}/rescan`, { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Rescan failed.");
+    findings = payload.findings;
+    currentSummary = payload.summary;
+    currentScanId = payload.id;
+    selectedId = findings[0]?.id ?? null;
+    const comparison = payload.comparison || {};
+    document.querySelector("#comparison-summary").textContent = `${comparison.fixedFindings || 0} fixed · ${comparison.newFindings || 0} new · ${comparison.unchangedFindings || 0} unchanged · score ${(comparison.scoreChange || 0) >= 0 ? "+" : ""}${comparison.scoreChange || 0}`;
+    setProgress(100, "Rescan complete", 4);
+    await loadHistory();
+    renderFindings(); renderDetail(); updateMetrics();
+    showToast("Rescan complete. The comparison is ready.");
+  } catch (error) { showToast(error.message, true); }
+  finally { button.textContent = "Rescan repository"; updateMetrics(); }
+}
+
 function showToast(message, error = false) {
   toast.textContent = message;
   toast.classList.toggle("error", error);
@@ -212,6 +300,7 @@ document.querySelectorAll(".filter").forEach((button) => button.addEventListener
   if (!visible.some((finding) => finding.id === selectedId)) selectedId = visible[0]?.id ?? null;
   renderFindings(); renderDetail();
 }));
+document.querySelector("#rescan-button").addEventListener("click", rescanRepository);
 
 async function detectBackend() {
   try {
@@ -220,6 +309,7 @@ async function detectBackend() {
     backendAvailable = response.ok;
     document.querySelector("#mode-label").textContent = payload.aiEnabled ? "Live + AI" : "Live scanner";
     document.querySelector("#form-message").textContent = "Ready for a live scan. Only public GitHub repositories are supported.";
+    await loadHistory();
   } catch {
     document.querySelector("#mode-label").textContent = "Static demo";
   }

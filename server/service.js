@@ -1,6 +1,7 @@
 import { cloneRepository, removeClone } from "./repository.js";
 import { scanLocalRepository } from "./scanners.js";
 import { explainFinding } from "./ai.js";
+import { runExternalScanners } from "./external-scanners.js";
 import { scanId } from "./utils.js";
 
 export class AuditService {
@@ -16,6 +17,16 @@ export class AuditService {
     const clone = await cloneRepository(repository, this.timeoutMs);
     try {
       const result = await scanLocalRepository(clone.directory, { maxFiles: this.maxFiles });
+      const external = await runExternalScanners(clone.directory);
+      if (external.findings.length) {
+        result.findings.push(...external.findings);
+        const weights = { critical: 25, high: 14, medium: 7, low: 2 };
+        result.summary.open = result.findings.length;
+        result.summary.critical = result.findings.filter((item) => item.severity === "critical").length;
+        result.summary.high = result.findings.filter((item) => item.severity === "high").length;
+        result.summary.score = Math.max(0, 100 - result.findings.reduce((total, item) => total + weights[item.severity], 0));
+        result.summary.scanners.push(...external.tools.filter((tool) => tool.available).map((tool) => tool.name));
+      }
       const scan = {
         id,
         createdAt,
@@ -30,7 +41,21 @@ export class AuditService {
           commit: clone.commit,
         },
         ...result,
+        externalScanners: external.tools,
       };
+      if (previousScanId) {
+        const previous = await this.store.get(previousScanId);
+        if (previous) {
+          const previousKeys = new Set(previous.findings.map((item) => `${item.rule}:${item.file}:${item.line}`));
+          const currentKeys = new Set(scan.findings.map((item) => `${item.rule}:${item.file}:${item.line}`));
+          scan.comparison = {
+            scoreChange: scan.summary.score - previous.summary.score,
+            newFindings: scan.findings.filter((item) => !previousKeys.has(`${item.rule}:${item.file}:${item.line}`)).length,
+            fixedFindings: previous.findings.filter((item) => !currentKeys.has(`${item.rule}:${item.file}:${item.line}`)).length,
+            unchangedFindings: scan.findings.filter((item) => previousKeys.has(`${item.rule}:${item.file}:${item.line}`)).length,
+          };
+        }
+      }
       await this.store.save(scan);
       return scan;
     } finally {

@@ -17,6 +17,8 @@ const service = new AuditService(store, {
   timeoutMs: process.env.CHROLLO_SCAN_TIMEOUT_MS,
   maxFiles: process.env.CHROLLO_MAX_FILES,
 });
+const requestWindows = new Map();
+const rateLimit = Number(process.env.CHROLLO_RATE_LIMIT || 30);
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -29,6 +31,39 @@ const types = {
 function routeMatch(pathname, pattern) {
   const match = pathname.match(pattern);
   return match ? match.slice(1).map(decodeURIComponent) : null;
+}
+
+function allowRequest(request) {
+  const key = request.socket.remoteAddress || "local";
+  const now = Date.now();
+  const window = requestWindows.get(key) || { startedAt: now, count: 0 };
+  if (now - window.startedAt > 60_000) { window.startedAt = now; window.count = 0; }
+  window.count += 1;
+  requestWindows.set(key, window);
+  return window.count <= rateLimit;
+}
+
+function toSarif(scan) {
+  const rules = [...new Map(scan.findings.map((item) => [item.rule, {
+    id: item.rule,
+    name: item.title,
+    shortDescription: { text: item.title },
+    fullDescription: { text: item.explanation },
+    defaultConfiguration: { level: item.severity === "critical" || item.severity === "high" ? "error" : item.severity === "medium" ? "warning" : "note" },
+  }])).values()];
+  return {
+    version: "2.1.0",
+    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+    runs: [{
+      tool: { driver: { name: "Chrollo", version: "1.0.0", rules } },
+      results: scan.findings.map((item) => ({
+        ruleId: item.rule,
+        level: item.severity === "critical" || item.severity === "high" ? "error" : item.severity === "medium" ? "warning" : "note",
+        message: { text: item.title },
+        locations: [{ physicalLocation: { artifactLocation: { uri: item.file }, region: { startLine: item.line } } }],
+      })),
+    }],
+  };
 }
 
 async function handleApi(request, response, url) {
@@ -51,7 +86,13 @@ async function handleApi(request, response, url) {
   const scanRoute = routeMatch(url.pathname, /^\/api\/scans\/([^/]+)$/);
   if (request.method === "GET" && scanRoute) {
     const scan = await store.get(scanRoute[0]);
-    return scan ? sendJson(response, 200, scan) : sendJson(response, 404, { error: "Scan not found." });
+    if (!scan) return sendJson(response, 404, { error: "Scan not found." });
+    if (url.searchParams.get("format") === "sarif") {
+      response.setHeader("content-disposition", `attachment; filename=chrollo-${scan.id}.sarif`);
+      return sendJson(response, 200, toSarif(scan));
+    }
+    if (url.searchParams.get("format") === "json") response.setHeader("content-disposition", `attachment; filename=chrollo-${scan.id}.json`);
+    return sendJson(response, 200, scan);
   }
 
   const rescanRoute = routeMatch(url.pathname, /^\/api\/scans\/([^/]+)\/rescan$/);
@@ -104,6 +145,7 @@ async function handleStatic(response, url) {
 
 const server = http.createServer(async (request, response) => {
   try {
+    if (!allowRequest(request)) return sendJson(response, 429, { error: "Rate limit exceeded. Try again in one minute." });
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
     if (url.pathname.startsWith("/api/")) await handleApi(request, response, url);
     else if (request.method === "GET" || request.method === "HEAD") await handleStatic(response, url);

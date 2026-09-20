@@ -52,6 +52,38 @@
         </ol>
       </section>
 
+      <section class="results-overview" aria-labelledby="results-overview-title">
+        <div class="overview-heading">
+          <div>
+            <span class="section-label">Analytics</span>
+            <h2 id="results-overview-title">Results overview</h2>
+          </div>
+          <div class="overview-actions">
+            <button class="secondary-button" id="rescan-button" disabled>Rescan repository</button>
+            <a class="secondary-button" id="json-export" href="#" aria-disabled="true">Export JSON</a>
+            <a class="secondary-button" id="sarif-export" href="#" aria-disabled="true">Export SARIF</a>
+          </div>
+        </div>
+        <div class="chart-grid">
+          <figure class="chart-panel">
+            <figcaption>Findings by severity</figcaption>
+            <div id="severity-chart" class="bar-chart" role="img" aria-label="Finding counts grouped by severity"></div>
+          </figure>
+          <figure class="chart-panel">
+            <figcaption>Findings by scanner</figcaption>
+            <div id="scanner-chart" class="bar-chart" role="img" aria-label="Finding counts grouped by scanner"></div>
+          </figure>
+          <figure class="chart-panel trend-panel">
+            <figcaption>Security score trend</figcaption>
+            <svg id="score-chart" viewBox="0 0 520 160" role="img" aria-labelledby="score-chart-title score-chart-description">
+              <title id="score-chart-title">Security score trend</title>
+              <desc id="score-chart-description">Security score from recent repository scans, from zero to one hundred.</desc>
+            </svg>
+          </figure>
+        </div>
+        <p id="comparison-summary" class="comparison-summary" aria-live="polite"></p>
+      </section>
+
       <section id="workspace" class="workspace" aria-label="Security findings workspace">
         <aside class="summary-panel">
           <div class="summary-title">
