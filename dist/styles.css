@@ -137,6 +137,7 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(36,87,214,
 .action-button:hover { background: #f7f8fa; }
 .action-button.approve { grid-column: 1 / -1; border-color: #173e9f; background: var(--accent); color: white; }
 .action-button.approve:hover { background: #1e4bbb; }
+.action-button.pr-action { grid-column: 1 / -1; display: grid; place-items: center; text-decoration: none; }
 .action-button:disabled { cursor: default; opacity: .6; }
 .empty-detail { display: grid; min-height: 500px; place-items: center; color: var(--muted); text-align: center; }
 .toast { position: fixed; right: 22px; bottom: 22px; max-width: 360px; padding: 12px 14px; border: 1px solid #9bd4c7; border-radius: 7px; background: #effaf7; color: #145c4c; box-shadow: 0 12px 30px rgba(16,24,40,.14); opacity: 0; transform: translateY(8px); pointer-events: none; transition: .18s; z-index: 50; }

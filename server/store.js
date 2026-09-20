@@ -6,6 +6,9 @@ export class ScanStore {
     this.directory = path.resolve(directory);
     this.file = path.join(this.directory, "scans.json");
     this.queue = Promise.resolve();
+    this.supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
+    this.supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    this.lastRemoteError = null;
   }
 
   async initialize() {
@@ -18,6 +21,17 @@ export class ScanStore {
   }
 
   async all() {
+    if (this.supabaseUrl && this.supabaseKey) {
+      try {
+        const response = await fetch(`${this.supabaseUrl}/rest/v1/chrollo_scans?select=payload&order=created_at.desc&limit=50`, {
+          headers: { apikey: this.supabaseKey, authorization: `Bearer ${this.supabaseKey}` },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) throw new Error(`Supabase returned HTTP ${response.status}`);
+        this.lastRemoteError = null;
+        return (await response.json()).map((row) => row.payload);
+      } catch (error) { this.lastRemoteError = error.message; }
+    }
     const raw = await fs.readFile(this.file, "utf8");
     const scans = JSON.parse(raw);
     return scans.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -36,8 +50,34 @@ export class ScanStore {
       const temporary = `${this.file}.${process.pid}.tmp`;
       await fs.writeFile(temporary, `${JSON.stringify(scans.slice(0, 50), null, 2)}\n`, "utf8");
       await fs.rename(temporary, this.file);
+      if (this.supabaseUrl && this.supabaseKey) {
+        try {
+          const response = await fetch(`${this.supabaseUrl}/rest/v1/chrollo_scans?on_conflict=id`, {
+            method: "POST",
+            headers: {
+              apikey: this.supabaseKey,
+              authorization: `Bearer ${this.supabaseKey}`,
+              "content-type": "application/json",
+              prefer: "resolution=merge-duplicates,return=minimal",
+            },
+            body: JSON.stringify([{ id: scan.id, created_at: scan.createdAt, repository_url: scan.repository.url, payload: scan }]),
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok) throw new Error(`Supabase returned HTTP ${response.status}`);
+          this.lastRemoteError = null;
+        } catch (error) { this.lastRemoteError = error.message; }
+      }
     });
     await this.queue;
     return scan;
+  }
+
+  status() {
+    return {
+      configured: Boolean(this.supabaseUrl && this.supabaseKey),
+      active: Boolean(this.supabaseUrl && this.supabaseKey && !this.lastRemoteError),
+      fallback: "local-json",
+      error: this.lastRemoteError,
+    };
   }
 }

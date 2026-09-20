@@ -26,6 +26,7 @@ let selectedId = findings[0].id;
 let activeFilter = "all";
 let currentScanId = null;
 let backendAvailable = false;
+let integrations = { ai: false, github: false, persistence: { configured: false }, externalScanners: false };
 let repositoryName = "OWASP / NodeGoat";
 let currentSummary = demoSummary();
 let scanHistory = [];
@@ -82,12 +83,16 @@ function renderDetail() {
     <div class="detail-section"><h3>Recommended change</h3><pre class="diff-block">${(finding.patch || []).map((line) => `<span class="${line.startsWith("+") ? "add" : line.startsWith("-") ? "remove" : ""}">${escapeHtml(line)}</span>`).join("\n")}</pre></div>
     <div class="detail-actions">
       <button class="action-button" id="reject-button" ${finding.status !== "open" ? "disabled" : ""}>Dismiss</button>
-      <button class="action-button" id="explain-button" ${!backendAvailable || finding.status !== "open" ? "disabled" : ""}>Explain with AI</button>
+      <button class="action-button" id="explain-button" ${!integrations.ai || finding.status !== "open" ? "disabled" : ""}>Explain with AI</button>
       <button class="action-button approve" id="approve-button" ${finding.status !== "open" ? "disabled" : ""}>${finding.status === "approved" ? "Approved for remediation" : "Approve recommendation"}</button>
+      ${finding.remediationPullRequest
+        ? `<a class="action-button pr-action" href="${escapeHtml(finding.remediationPullRequest.url)}" target="_blank" rel="noopener">Open draft PR #${finding.remediationPullRequest.number}</a>`
+        : `<button class="action-button pr-action" id="pr-button" ${!integrations.github || finding.decision !== "approve" ? "disabled" : ""}>Create draft remediation PR</button>`}
     </div>`;
   document.querySelector("#approve-button")?.addEventListener("click", () => decideFinding(finding.id, "approve"));
   document.querySelector("#reject-button")?.addEventListener("click", () => decideFinding(finding.id, "reject"));
   document.querySelector("#explain-button")?.addEventListener("click", () => explainFinding(finding.id));
+  document.querySelector("#pr-button")?.addEventListener("click", () => createRemediationPullRequest(finding.id));
 }
 
 function updateMetrics() {
@@ -251,6 +256,22 @@ async function explainFinding(id) {
   } catch (error) { showToast(error.message, true); renderDetail(); }
 }
 
+async function createRemediationPullRequest(findingId) {
+  if (!currentScanId) return;
+  const button = document.querySelector("#pr-button");
+  button.disabled = true;
+  button.textContent = "Creating draft PR…";
+  try {
+    const response = await fetch(`/api/scans/${encodeURIComponent(currentScanId)}/findings/${encodeURIComponent(findingId)}/remediate`, { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Pull request creation failed.");
+    const finding = findings.find((item) => item.id === findingId);
+    finding.remediationPullRequest = payload;
+    renderDetail();
+    showToast(`Draft remediation PR #${payload.number} created.`);
+  } catch (error) { showToast(error.message, true); renderDetail(); }
+}
+
 async function rescanRepository() {
   if (!currentScanId) return;
   const button = document.querySelector("#rescan-button");
@@ -307,8 +328,12 @@ async function detectBackend() {
     const response = await fetch("/api/health", { signal: AbortSignal.timeout(1500) });
     const payload = await response.json();
     backendAvailable = response.ok;
-    document.querySelector("#mode-label").textContent = payload.aiEnabled ? "Live + AI" : "Live scanner";
-    document.querySelector("#form-message").textContent = "Ready for a live scan. Only public GitHub repositories are supported.";
+    integrations = payload.integrations || integrations;
+    const enabled = [integrations.ai && "AI", integrations.github && "GitHub", integrations.persistence?.configured && "Supabase"].filter(Boolean);
+    document.querySelector("#mode-label").textContent = enabled.length ? `Live + ${enabled.join(" + ")}` : "Live scanner";
+    document.querySelector("#form-message").textContent = integrations.github
+      ? "Ready for public or authorized private GitHub repositories."
+      : "Ready for a live scan. Configure GitHub authentication to scan private repositories.";
     await loadHistory();
   } catch {
     document.querySelector("#mode-label").textContent = "Static demo";

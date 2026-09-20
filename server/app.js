@@ -5,9 +5,12 @@ import { fileURLToPath } from "node:url";
 import { ScanStore } from "./store.js";
 import { AuditService } from "./service.js";
 import { publicError, readJson, sendJson, validateGithubUrl } from "./utils.js";
+import { loadEnv } from "./env.js";
+import { createRemediationPullRequest, githubConfigured } from "./github.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.dirname(here);
+await loadEnv(path.join(projectRoot, ".env"));
 const staticRoot = path.join(projectRoot, "dist");
 const dataDirectory = process.env.CHROLLO_DATA_DIR || path.join(projectRoot, "data");
 const port = Number(process.env.PORT || 4173);
@@ -68,7 +71,16 @@ function toSarif(scan) {
 
 async function handleApi(request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/health") {
-    return sendJson(response, 200, { status: "ok", version: "1.0.0", aiEnabled: Boolean(process.env.GEMINI_API_KEY) });
+    return sendJson(response, 200, {
+      status: "ok",
+      version: "1.1.0",
+      integrations: {
+        ai: Boolean(process.env.GEMINI_API_KEY),
+        github: githubConfigured(),
+        persistence: store.status(),
+        externalScanners: process.env.CHROLLO_EXTERNAL_SCANNERS === "true",
+      },
+    });
   }
 
   if (request.method === "GET" && url.pathname === "/api/scans") {
@@ -117,6 +129,20 @@ async function handleApi(request, response, url) {
     if (!process.env.GEMINI_API_KEY) return sendJson(response, 503, { error: "GEMINI_API_KEY is not configured." });
     const finding = await service.explain(explainRoute[0], explainRoute[1]);
     return finding ? sendJson(response, 200, finding) : sendJson(response, 404, { error: "Finding not found." });
+  }
+
+  const remediationRoute = routeMatch(url.pathname, /^\/api\/scans\/([^/]+)\/findings\/([^/]+)\/remediate$/);
+  if (request.method === "POST" && remediationRoute) {
+    if (!githubConfigured()) return sendJson(response, 503, { error: "GitHub authentication is not configured." });
+    const scan = await store.get(remediationRoute[0]);
+    const finding = scan?.findings.find((item) => item.id === remediationRoute[1]);
+    if (!scan || !finding) return sendJson(response, 404, { error: "Finding not found." });
+    if (finding.decision !== "approve") return sendJson(response, 409, { error: "Approve the recommendation before creating a remediation pull request." });
+    if (finding.remediationPullRequest) return sendJson(response, 200, finding.remediationPullRequest);
+    const pullRequest = await createRemediationPullRequest(scan, finding);
+    finding.remediationPullRequest = pullRequest;
+    await store.save(scan);
+    return sendJson(response, 201, pullRequest);
   }
 
   return sendJson(response, 404, { error: "API route not found." });

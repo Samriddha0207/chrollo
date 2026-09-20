@@ -17,6 +17,9 @@ Chrollo is a repository security review workspace built by **Phantom Troupe** fo
 - Optional Semgrep, Gitleaks and OSV-Scanner adapters
 - Per-client API rate limiting
 - Optional Gemini explanations when a key is explicitly configured
+- GitHub App or fine-grained token authentication for authorized private repositories
+- Draft remediation pull requests after reviewer approval
+- Optional Supabase persistence with automatic local fallback
 - Static demo fallback when the UI is opened without the Node service
 - Responsive review UI and WebMCP finding lookup
 - Docker support and automated tests
@@ -53,9 +56,31 @@ CHROLLO_EXTERNAL_SCANNERS=true
 
 Chrollo runs available tools without executing repository code and merges their results with the built-in scanners. Missing tools are skipped, so the application remains usable during the hackathon.
 
-## Optional Gemini explanations
+## Configure integrations
 
-Copy `.env.example` to `.env`, set `GEMINI_API_KEY`, then load those variables before starting the process. Evidence is sent to Gemini only when the key is configured and the reviewer clicks **Explain with AI**.
+Copy `.env.example` to `.env`. Chrollo loads this file automatically and never serves it to the browser.
+
+### Gemini
+
+Set `GEMINI_API_KEY`. Evidence is sent to Gemini only when a reviewer explicitly clicks **Explain with AI**.
+
+### GitHub App and private repositories
+
+Create and install a GitHub App on the repositories Chrollo may scan. Give it **Contents: read and write** and **Pull requests: read and write**, then configure:
+
+```text
+GITHUB_APP_ID=
+GITHUB_INSTALLATION_ID=
+GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+```
+
+For local development, a fine-grained `GITHUB_TOKEN` scoped to selected repositories is also supported. The token is passed to Git per command and is never written into a remote URL.
+
+After a finding is approved, Chrollo can create a draft pull request containing a remediation plan, evidence and the proposed diff. The PR remains draft because applying security changes without repository tests would be unsafe.
+
+### Supabase
+
+Run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL editor, then set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. Keep the service-role key on the server. If Supabase is unavailable, Chrollo continues using its local JSON store and reports the fallback through `/api/health`.
 
 ## Verify
 
@@ -77,6 +102,7 @@ npm test
 | `POST` | `/api/scans/:id/rescan` | Clone and scan the repository again |
 | `POST` | `/api/scans/:id/findings/:findingId/decision` | Approve or reject a recommendation |
 | `POST` | `/api/scans/:id/findings/:findingId/explain` | Request an optional Gemini explanation |
+| `POST` | `/api/scans/:id/findings/:findingId/remediate` | Create an approved draft remediation PR |
 
 ## Project structure
 
