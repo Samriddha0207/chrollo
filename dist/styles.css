@@ -74,13 +74,23 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(36,87,214,
 .bar-fill.medium { background: var(--medium); }
 .bar-fill.low { background: #667085; }
 .bar-row strong { color: var(--text); text-align: right; font-size: 12px; }
+.trend-panel { position: relative; }
 .trend-panel svg { width: 100%; min-height: 142px; overflow: visible; }
 .chart-axis { stroke: var(--border-strong); stroke-width: 1; }
 .chart-gridline { stroke: var(--border); stroke-width: 1; }
 .chart-line { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
 .chart-point { fill: var(--surface); stroke: var(--accent); stroke-width: 3; }
+.chart-hit { fill: transparent; stroke: transparent; pointer-events: all; cursor: pointer; }
+.chart-hit:focus-visible { fill: rgba(36,87,214,.12); stroke: var(--accent); stroke-width: 2; outline: none; }
 .chart-label { fill: var(--muted); font: 11px Inter, ui-sans-serif, system-ui, sans-serif; }
 .chart-value { fill: var(--text); font: 700 11px Inter, ui-sans-serif, system-ui, sans-serif; }
+.chart-tooltip { position: absolute; z-index: 8; width: min(250px, calc(100% - 16px)); padding: 11px 12px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text); box-shadow: 0 10px 26px rgba(16,24,40,.16); pointer-events: none; transform: translate(-50%, calc(-100% - 12px)); }
+.chart-tooltip[hidden] { display: none; }
+.chart-tooltip strong, .chart-tooltip span { display: block; }
+.chart-tooltip strong { margin-bottom: 4px; font-size: 13px; }
+.chart-tooltip span { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.chart-tooltip .tooltip-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px 10px; margin-top: 7px; }
+.chart-tooltip .tooltip-metrics b { color: var(--text); font-weight: 700; }
 .comparison-summary { min-height: 18px; margin: 14px 0 0; color: var(--muted); font-size: 12px; }
 .workspace { display: grid; grid-template-columns: 220px minmax(390px, 1fr) minmax(350px, 430px); gap: 12px; align-items: start; }
 .summary-panel, .findings-panel, .detail-panel { border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }

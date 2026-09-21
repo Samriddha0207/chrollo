@@ -48,7 +48,10 @@ export class ScanStore {
       if (index >= 0) scans[index] = scan;
       else scans.unshift(scan);
       const temporary = `${this.file}.${process.pid}.tmp`;
-      await fs.writeFile(temporary, `${JSON.stringify(scans.slice(0, 50), null, 2)}\n`, "utf8");
+      const retentionDays = Math.max(1, Number(process.env.CHROLLO_RETENTION_DAYS || 30));
+      const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+      const retained = scans.filter((item) => Date.parse(item.createdAt) >= cutoff).slice(0, 50);
+      await fs.writeFile(temporary, `${JSON.stringify(retained, null, 2)}\n`, "utf8");
       await fs.rename(temporary, this.file);
       if (this.supabaseUrl && this.supabaseKey) {
         try {

@@ -100,27 +100,35 @@ export async function createRemediationPullRequest(scan, finding) {
   const branch = `${prefix}-${finding.id.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 48)}-${Date.now().toString(36)}`;
   const repositoryData = await githubRequest(`/repos/${owner}/${repository}`);
   const base = repositoryData.default_branch;
-  const reference = await githubRequest(`/repos/${owner}/${repository}/git/ref/heads/${encodeURIComponent(base)}`);
-  await githubRequest(`/repos/${owner}/${repository}/git/refs`, { method: "POST", body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: reference.object.sha }) });
-
-  const planPath = `.chrollo/remediation-${finding.id.replace(/[^A-Za-z0-9_.-]/g, "-")}.md`;
-  await githubRequest(`/repos/${owner}/${repository}/contents/${planPath}`, {
-    method: "PUT",
-    body: JSON.stringify({
-      message: `docs(security): plan remediation for ${finding.id}`,
-      content: Buffer.from(remediationDocument(scan, finding)).toString("base64"),
-      branch,
-    }),
-  });
-  const pull = await githubRequest(`/repos/${owner}/${repository}/pulls`, {
-    method: "POST",
-    body: JSON.stringify({
-      title: `Security remediation: ${finding.title}`,
-      head: branch,
-      base,
-      draft: true,
-      body: `Chrollo prepared a reviewable remediation plan for **${finding.id}** at \`${finding.file}:${finding.line}\`.\n\nThis draft does not claim the vulnerability is fixed. Implement the recommended change, run tests, and use Chrollo's rescan before marking it ready for review.`,
-    }),
-  });
-  return { number: pull.number, url: pull.html_url, branch, base, draft: pull.draft };
+  await githubRequest(`/repos/${owner}/${repository}/git/commits/${scan.repository.commit}`);
+  let branchCreated = false;
+  try {
+    await githubRequest(`/repos/${owner}/${repository}/git/refs`, { method: "POST", body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: scan.repository.commit }) });
+    branchCreated = true;
+    const planPath = `.chrollo/remediation-${finding.id.replace(/[^A-Za-z0-9_.-]/g, "-")}.md`;
+    await githubRequest(`/repos/${owner}/${repository}/contents/${planPath}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        message: `docs(security): plan remediation for ${finding.id}`,
+        content: Buffer.from(remediationDocument(scan, finding)).toString("base64"),
+        branch,
+      }),
+    });
+    const pull = await githubRequest(`/repos/${owner}/${repository}/pulls`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: `Security remediation: ${finding.title}`,
+        head: branch,
+        base,
+        draft: true,
+        body: `Chrollo prepared a reviewable remediation plan for **${finding.id}** at \`${finding.file}:${finding.line}\`.\n\nThe branch starts from the exact scanned commit \`${scan.repository.commit.slice(0, 12)}\`. This draft does not claim the vulnerability is fixed. Implement the recommended change, run tests, and rescan before marking it ready for review.`,
+      }),
+    });
+    return { number: pull.number, url: pull.html_url, branch, base, scannedCommit: scan.repository.commit, draft: pull.draft };
+  } catch (error) {
+    if (branchCreated) {
+      try { await githubRequest(`/repos/${owner}/${repository}/git/refs/heads/${branch}`, { method: "DELETE" }); } catch { /* best-effort cleanup */ }
+    }
+    throw error;
+  }
 }

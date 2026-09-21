@@ -11,12 +11,18 @@ export class AuditService {
     this.maxFiles = Number(options.maxFiles ?? 2500);
   }
 
-  async scan(repository, previousScanId = null) {
-    const id = scanId();
+  async scan(repository, previousScanId = null, requestedId = null, onProgress = () => {}) {
+    const id = requestedId || scanId();
     const createdAt = new Date().toISOString();
     const clone = await cloneRepository(repository, this.timeoutMs);
     try {
-      const result = await scanLocalRepository(clone.directory, { maxFiles: this.maxFiles });
+      onProgress(45, "Scanning source, secrets, history and dependency manifests");
+      const result = await scanLocalRepository(clone.directory, {
+        maxFiles: this.maxFiles,
+        maxBytes: Number(process.env.CHROLLO_MAX_SCAN_BYTES || 50_000_000),
+        maxFileBytes: Number(process.env.CHROLLO_MAX_FILE_BYTES || 512_000),
+      });
+      onProgress(75, "Running configured external scanners");
       const external = await runExternalScanners(clone.directory);
       if (external.findings.length) {
         result.findings.push(...external.findings);
@@ -39,20 +45,25 @@ export class AuditService {
           url: repository.webUrl,
           branch: clone.branch,
           commit: clone.commit,
+          sizeKb: clone.sizeKb,
+          cloneBytes: clone.cloneBytes,
+          private: clone.private,
         },
         ...result,
         externalScanners: external.tools,
       };
+      onProgress(90, "Normalizing findings and calculating comparison data");
       if (previousScanId) {
         const previous = await this.store.get(previousScanId);
         if (previous) {
-          const previousKeys = new Set(previous.findings.map((item) => `${item.rule}:${item.file}:${item.line}`));
-          const currentKeys = new Set(scan.findings.map((item) => `${item.rule}:${item.file}:${item.line}`));
+          const key = (item) => item.fingerprint || `${item.rule}:${item.file}:${item.line}`;
+          const previousKeys = new Set(previous.findings.map(key));
+          const currentKeys = new Set(scan.findings.map(key));
           scan.comparison = {
             scoreChange: scan.summary.score - previous.summary.score,
-            newFindings: scan.findings.filter((item) => !previousKeys.has(`${item.rule}:${item.file}:${item.line}`)).length,
-            fixedFindings: previous.findings.filter((item) => !currentKeys.has(`${item.rule}:${item.file}:${item.line}`)).length,
-            unchangedFindings: scan.findings.filter((item) => previousKeys.has(`${item.rule}:${item.file}:${item.line}`)).length,
+            newFindings: scan.findings.filter((item) => !previousKeys.has(key(item))).length,
+            fixedFindings: previous.findings.filter((item) => !currentKeys.has(key(item))).length,
+            unchangedFindings: scan.findings.filter((item) => previousKeys.has(key(item))).length,
           };
         }
       }
@@ -71,6 +82,8 @@ export class AuditService {
     finding.decision = action;
     finding.decidedAt = new Date().toISOString();
     finding.status = action === "reject" ? "dismissed" : "approved";
+    scan.events ||= [];
+    scan.events.push({ type: "finding_decision", findingId, action, createdAt: finding.decidedAt });
     scan.summary.open = scan.findings.filter((item) => item.status === "open").length;
     await this.store.save(scan);
     return finding;

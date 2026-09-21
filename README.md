@@ -5,9 +5,14 @@ Chrollo is a repository security review workspace built by **Phantom Troupe** fo
 ## What works
 
 - Real shallow cloning of public GitHub repositories
+- GitHub metadata preflight with configurable repository-size limits
 - Built-in source security rules for command injection, NoSQL injection, XSS, unsafe evaluation and disabled TLS checks
 - Secret detection with evidence redaction
 - Dependency baseline checks for known vulnerable package versions
+- Live OSV.dev dependency queries with an offline fallback
+- OSV coverage for npm, Python, Go, Ruby, Composer and Rust lock files
+- Multiline JavaScript, Python, Java and React context rules
+- Recent Git-history secret scanning
 - Normalized severity, evidence, remediation and scoring
 - Persistent scan history in a local JSON store
 - Approve/dismiss review decisions
@@ -16,6 +21,10 @@ Chrollo is a repository security review workspace built by **Phantom Troupe** fo
 - JSON and GitHub-compatible SARIF exports
 - Optional Semgrep, Gitleaks and OSV-Scanner adapters
 - Per-client API rate limiting
+- Bounded asynchronous scan queue with live progress and back-pressure
+- Clone-disk, total scan-byte and individual file-size limits
+- Stable finding fingerprints for accurate comparisons after line changes
+- Same-origin write protection, structured request logs and runtime metrics
 - Optional Gemini explanations when a key is explicitly configured
 - GitHub App or fine-grained token authentication for authorized private repositories
 - Draft remediation pull requests after reviewer approval
@@ -24,7 +33,7 @@ Chrollo is a repository security review workspace built by **Phantom Troupe** fo
 - Responsive review UI and WebMCP finding lookup
 - Docker support and automated tests
 
-Chrollo never runs code from a scanned repository. Clones are stored in a random operating-system temporary directory and removed after each scan.
+Chrollo never runs code from a scanned repository. Clones are stored in a random operating-system temporary directory and removed after each scan. Stale Chrollo clone directories are removed when the service starts.
 
 ## Requirements
 
@@ -60,6 +69,8 @@ Chrollo runs available tools without executing repository code and merges their 
 
 Copy `.env.example` to `.env`. Chrollo loads this file automatically and never serves it to the browser.
 
+For an externally reachable API, set `CHROLLO_API_TOKEN` and have authenticated API clients send it as a bearer token. The built-in browser UI is intended for localhost or for deployment behind an identity-aware reverse proxy.
+
 ### Gemini
 
 Set `GEMINI_API_KEY`. Evidence is sent to Gemini only when a reviewer explicitly clicks **Explain with AI**.
@@ -94,6 +105,8 @@ npm test
 | Method | Route | Purpose |
 |---|---|---|
 | `GET` | `/api/health` | Service and AI configuration status |
+| `GET` | `/api/metrics` | Queue, storage, memory and uptime metrics |
+| `GET` | `/api/jobs/:id` | Queued scan progress and completed result |
 | `GET` | `/api/scans` | Recent scan summaries |
 | `POST` | `/api/scans` | Scan `{ "repositoryUrl": "https://github.com/owner/repo" }` |
 | `GET` | `/api/scans/:id` | Full normalized scan |
@@ -118,4 +131,4 @@ test/               automated tests
 
 ## Scope and safety
 
-The built-in scanner is an explainable hackathon implementation, not a replacement for a commercial SAST platform. Before production use, add authentication, per-user authorization, rate limiting, a job queue, database-backed storage, container-level clone isolation, and mature tools such as Semgrep, Gitleaks and OSV-Scanner.
+The built-in scanner is an explainable hackathon implementation, not a replacement for a commercial SAST platform. Chrollo now enforces a bounded queue, repository and scan limits, optional API authentication, same-origin writes and durable storage integration. A public multi-user deployment should still place it behind an identity-aware proxy, isolate each worker at the container or VM level, and install mature tools such as Semgrep, Gitleaks and OSV-Scanner for deeper interprocedural analysis.

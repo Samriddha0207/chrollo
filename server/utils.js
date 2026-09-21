@@ -49,6 +49,7 @@ export function sendJson(response, status, payload) {
     "content-length": Buffer.byteLength(body),
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
+    "cross-origin-resource-policy": "same-origin",
   });
   response.end(body);
 }

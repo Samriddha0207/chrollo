@@ -1,4 +1,5 @@
 import http from "node:http";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,8 @@ import { AuditService } from "./service.js";
 import { publicError, readJson, sendJson, validateGithubUrl } from "./utils.js";
 import { loadEnv } from "./env.js";
 import { createRemediationPullRequest, githubConfigured } from "./github.js";
+import { cleanupStaleClones } from "./repository.js";
+import { ScanQueue } from "./jobs.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.dirname(here);
@@ -16,9 +19,14 @@ const dataDirectory = process.env.CHROLLO_DATA_DIR || path.join(projectRoot, "da
 const port = Number(process.env.PORT || 4173);
 const store = new ScanStore(dataDirectory);
 await store.initialize();
+await cleanupStaleClones();
 const service = new AuditService(store, {
   timeoutMs: process.env.CHROLLO_SCAN_TIMEOUT_MS,
   maxFiles: process.env.CHROLLO_MAX_FILES,
+});
+const scanQueue = new ScanQueue(service, {
+  concurrency: process.env.CHROLLO_SCAN_CONCURRENCY || 2,
+  maximumQueued: process.env.CHROLLO_MAX_QUEUED_SCANS || 20,
 });
 const requestWindows = new Map();
 const rateLimit = Number(process.env.CHROLLO_RATE_LIMIT || 30);
@@ -44,6 +52,25 @@ function allowRequest(request) {
   window.count += 1;
   requestWindows.set(key, window);
   return window.count <= rateLimit;
+}
+
+function authorized(request, url) {
+  const expected = process.env.CHROLLO_API_TOKEN;
+  if (!expected || url.pathname === "/api/health") return true;
+  const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, "") || request.headers["x-chrollo-token"];
+  if (!supplied || supplied.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+}
+
+function validBrowserOrigin(request) {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) return true;
+  const origin = request.headers.origin;
+  if (!origin) return true;
+  try {
+    const source = new URL(origin);
+    const expected = new URL(`http://${request.headers.host || "localhost"}`);
+    return source.protocol === expected.protocol && source.host === expected.host;
+  } catch { return false; }
 }
 
 function toSarif(scan) {
@@ -73,13 +100,25 @@ async function handleApi(request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/health") {
     return sendJson(response, 200, {
       status: "ok",
-      version: "1.1.0",
+      version: "1.3.0",
       integrations: {
         ai: Boolean(process.env.GEMINI_API_KEY),
         github: githubConfigured(),
         persistence: store.status(),
         externalScanners: process.env.CHROLLO_EXTERNAL_SCANNERS === "true",
       },
+      queue: scanQueue.stats(),
+    });
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/metrics") {
+    const scans = await store.all();
+    return sendJson(response, 200, {
+      queue: scanQueue.stats(),
+      scansStored: scans.length,
+      findingsStored: scans.reduce((total, scan) => total + (scan.findings?.length || 0), 0),
+      uptimeSeconds: Math.round(process.uptime()),
+      memory: process.memoryUsage(),
     });
   }
 
@@ -91,8 +130,15 @@ async function handleApi(request, response, url) {
   if (request.method === "POST" && url.pathname === "/api/scans") {
     const body = await readJson(request);
     const repository = validateGithubUrl(body.repositoryUrl);
-    const scan = await service.scan(repository);
-    return sendJson(response, 201, scan);
+    const job = scanQueue.enqueue(repository);
+    response.setHeader("location", `/api/jobs/${job.id}`);
+    return sendJson(response, 202, job);
+  }
+
+  const jobRoute = routeMatch(url.pathname, /^\/api\/jobs\/([^/]+)$/);
+  if (request.method === "GET" && jobRoute) {
+    const job = scanQueue.get(jobRoute[0]);
+    return job ? sendJson(response, 200, job) : sendJson(response, 404, { error: "Scan job not found or expired." });
   }
 
   const scanRoute = routeMatch(url.pathname, /^\/api\/scans\/([^/]+)$/);
@@ -112,8 +158,9 @@ async function handleApi(request, response, url) {
     const prior = await store.get(rescanRoute[0]);
     if (!prior) return sendJson(response, 404, { error: "Scan not found." });
     const repository = validateGithubUrl(prior.repository.url);
-    const scan = await service.scan(repository, prior.id);
-    return sendJson(response, 201, scan);
+    const job = scanQueue.enqueue(repository, prior.id);
+    response.setHeader("location", `/api/jobs/${job.id}`);
+    return sendJson(response, 202, job);
   }
 
   const decisionRoute = routeMatch(url.pathname, /^\/api\/scans\/([^/]+)\/findings\/([^/]+)\/decision$/);
@@ -141,6 +188,8 @@ async function handleApi(request, response, url) {
     if (finding.remediationPullRequest) return sendJson(response, 200, finding.remediationPullRequest);
     const pullRequest = await createRemediationPullRequest(scan, finding);
     finding.remediationPullRequest = pullRequest;
+    scan.events ||= [];
+    scan.events.push({ type: "remediation_pull_request", findingId: finding.id, pullRequest, createdAt: new Date().toISOString() });
     await store.save(scan);
     return sendJson(response, 201, pullRequest);
   }
@@ -152,7 +201,8 @@ async function handleStatic(response, url) {
   const requested = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
   const normalized = path.normalize(requested).replace(/^(\.\.(\/|\\|$))+/, "");
   const file = path.join(staticRoot, normalized);
-  if (!file.startsWith(staticRoot)) return sendJson(response, 403, { error: "Forbidden." });
+  const relative = path.relative(staticRoot, file);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return sendJson(response, 403, { error: "Forbidden." });
   try {
     const contents = await fs.readFile(file);
     response.writeHead(200, {
@@ -160,6 +210,9 @@ async function handleStatic(response, url) {
       "content-length": contents.length,
       "cache-control": "no-cache",
       "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+      "cross-origin-opener-policy": "same-origin",
+      "cross-origin-resource-policy": "same-origin",
       "content-security-policy": "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
     });
     response.end(contents);
@@ -170,14 +223,28 @@ async function handleStatic(response, url) {
 }
 
 const server = http.createServer(async (request, response) => {
+  const requestId = crypto.randomUUID();
+  const startedAt = Date.now();
+  response.setHeader("x-request-id", requestId);
+  response.setHeader("referrer-policy", "no-referrer");
+  response.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=()");
+  response.on("finish", () => console.log(JSON.stringify({
+    type: "http_request", requestId, method: request.method, path: request.url?.split("?")[0], status: response.statusCode, durationMs: Date.now() - startedAt,
+  })));
   try {
-    if (!allowRequest(request)) return sendJson(response, 429, { error: "Rate limit exceeded. Try again in one minute." });
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+    if (url.pathname.startsWith("/api/") && !authorized(request, url)) return sendJson(response, 401, { error: "Authentication required." });
+    if (url.pathname.startsWith("/api/") && !validBrowserOrigin(request)) return sendJson(response, 403, { error: "Cross-origin state-changing requests are not allowed." });
+    const hasRequestBody = Number(request.headers["content-length"] || 0) > 0 || Boolean(request.headers["transfer-encoding"]);
+    if (url.pathname.startsWith("/api/") && hasRequestBody && ["POST", "PUT", "PATCH"].includes(request.method) && !String(request.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+      return sendJson(response, 415, { error: "State-changing API requests require application/json." });
+    }
+    if (url.pathname.startsWith("/api/") && !allowRequest(request)) return sendJson(response, 429, { error: "Rate limit exceeded. Try again in one minute." });
     if (url.pathname.startsWith("/api/")) await handleApi(request, response, url);
     else if (request.method === "GET" || request.method === "HEAD") await handleStatic(response, url);
     else sendJson(response, 405, { error: "Method not allowed." });
   } catch (error) {
-    const status = /valid|supported|form|too large|JSON/.test(error.message) ? 400 : 500;
+    const status = error.statusCode || (/valid|supported|form|too large|JSON|limit/.test(error.message) ? 400 : 500);
     sendJson(response, status, { error: publicError(error) });
   }
 });

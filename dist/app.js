@@ -150,7 +150,7 @@ function renderCharts() {
     return `<line class="chart-gridline" x1="${left}" y1="${y}" x2="${width - right}" y2="${y}"/><text class="chart-label" x="${left - 8}" y="${y + 4}" text-anchor="end">${score}</text>`;
   }).join("");
   const polyline = points.map((point) => `${point.x},${point.y}`).join(" ");
-  const marks = points.map((point, index) => `<circle class="chart-point" cx="${point.x}" cy="${point.y}" r="4"><title>Scan ${index + 1}: score ${point.score}</title></circle>`).join("");
+  const marks = points.map((point, index) => `<g><circle class="chart-hit" data-history-index="${index}" cx="${point.x}" cy="${point.y}" r="15" tabindex="0" role="button" aria-label="Show details for scan ${index + 1}, score ${point.score}"></circle><circle class="chart-point" cx="${point.x}" cy="${point.y}" r="4" aria-hidden="true"></circle></g>`).join("");
   const final = points.at(-1);
   document.querySelector("#score-chart").innerHTML = `
     <title id="score-chart-title">Security score trend</title><desc id="score-chart-description">Recent scan scores from zero to one hundred.</desc>
@@ -158,6 +158,42 @@ function renderCharts() {
     <polyline class="chart-line" points="${polyline}"/>${marks}
     <text class="chart-value" x="${Math.min(width - right - 4, final.x + 8)}" y="${Math.max(top + 10, final.y - 8)}" text-anchor="${final.x > width - 70 ? "end" : "start"}">${final.score}/100</text>
     <text class="chart-label" x="${left}" y="${height - 8}">Older</text><text class="chart-label" x="${width - right}" y="${height - 8}" text-anchor="end">Latest</text>`;
+  const tooltip = document.querySelector("#score-tooltip");
+  const panel = document.querySelector(".trend-panel");
+  const showTooltip = (target, index) => {
+    const scan = history[index];
+    const summary = scan.summary || {};
+    const repository = scan.repository ? `${scan.repository.owner} / ${scan.repository.name}` : repositoryName;
+    const timestamp = scan.completedAt || scan.createdAt;
+    const comparison = scan.comparison
+      ? `${scan.comparison.fixedFindings} fixed · ${scan.comparison.newFindings} new`
+      : "Baseline scan";
+    tooltip.innerHTML = `<strong>${escapeHtml(repository)}</strong>
+      <span>${escapeHtml(timestamp ? new Date(timestamp).toLocaleString() : "Current preview")}</span>
+      <div class="tooltip-metrics">
+        <span><b>${Number(summary.score ?? 0)}</b> score</span>
+        <span><b>${Number(scan.findingCount ?? summary.open ?? 0)}</b> findings</span>
+        <span><b>${Number(summary.critical ?? 0)}</b> critical</span>
+        <span><b>${Number(summary.high ?? 0)}</b> high</span>
+        <span><b>${Number(summary.filesScanned ?? 0)}</b> files</span>
+        <span>${escapeHtml(comparison)}</span>
+      </div>`;
+    tooltip.hidden = false;
+    const targetRect = target.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const half = Math.min(125, Math.max(80, panelRect.width / 3));
+    tooltip.style.left = `${Math.max(half + 4, Math.min(panelRect.width - half - 4, targetRect.left + targetRect.width / 2 - panelRect.left))}px`;
+    tooltip.style.top = `${Math.max(82, targetRect.top - panelRect.top)}px`;
+  };
+  const hideTooltip = () => { tooltip.hidden = true; };
+  document.querySelectorAll("#score-chart .chart-hit").forEach((target) => {
+    const index = Number(target.dataset.historyIndex);
+    target.addEventListener("mouseenter", () => showTooltip(target, index));
+    target.addEventListener("mouseleave", hideTooltip);
+    target.addEventListener("focus", () => showTooltip(target, index));
+    target.addEventListener("blur", hideTooltip);
+    target.addEventListener("click", () => tooltip.hidden ? showTooltip(target, index) : hideTooltip());
+  });
 }
 
 async function loadHistory() {
@@ -167,6 +203,24 @@ async function loadHistory() {
     scanHistory = response.ok ? await response.json() : [];
   } catch { scanHistory = []; }
   renderCharts();
+}
+
+async function waitForScanJob(initial, timeoutMs = 180_000) {
+  if (initial.scan) return initial.scan;
+  if (initial.findings) return initial;
+  const started = Date.now();
+  let job = initial;
+  while (!["complete", "failed"].includes(job.status)) {
+    if (Date.now() - started > timeoutMs) throw new Error("The scan is still running. Its job ID is " + initial.id + ". Refresh the scan history shortly.");
+    setProgress(Number(job.progress || 10), job.phase || "Scan queued", Math.min(3, Math.floor(Number(job.progress || 0) / 25)));
+    await new Promise((resolve) => window.setTimeout(resolve, 900));
+    const response = await fetch(`/api/jobs/${encodeURIComponent(initial.id)}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to read scan job status.");
+    job = payload;
+  }
+  if (job.status === "failed") throw new Error(job.error || "Scan failed.");
+  return job.scan;
 }
 
 function setProgress(percent, label, phaseIndex) {
@@ -196,12 +250,13 @@ async function runScan(repository) {
       const response = await fetch("/api/scans", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repositoryUrl: repository }) });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Scan failed.");
-      findings = payload.findings;
-      currentSummary = payload.summary;
-      repositoryName = `${payload.repository.owner} / ${payload.repository.name}`;
-      currentScanId = payload.id;
-      document.querySelector("#comparison-summary").textContent = payload.comparison
-        ? `${payload.comparison.fixedFindings} fixed · ${payload.comparison.newFindings} new · ${payload.comparison.unchangedFindings} unchanged · score ${payload.comparison.scoreChange >= 0 ? "+" : ""}${payload.comparison.scoreChange}`
+      const completed = await waitForScanJob(payload);
+      findings = completed.findings;
+      currentSummary = completed.summary;
+      repositoryName = `${completed.repository.owner} / ${completed.repository.name}`;
+      currentScanId = completed.id;
+      document.querySelector("#comparison-summary").textContent = completed.comparison
+        ? `${completed.comparison.fixedFindings} fixed · ${completed.comparison.newFindings} new · ${completed.comparison.unchangedFindings} unchanged · score ${completed.comparison.scoreChange >= 0 ? "+" : ""}${completed.comparison.scoreChange}`
         : "Baseline scan saved. Rescan after remediation to compare the results.";
     }
     selectedId = findings[0]?.id ?? null;
@@ -282,11 +337,12 @@ async function rescanRepository() {
     const response = await fetch(`/api/scans/${encodeURIComponent(currentScanId)}/rescan`, { method: "POST" });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Rescan failed.");
-    findings = payload.findings;
-    currentSummary = payload.summary;
-    currentScanId = payload.id;
+    const completed = await waitForScanJob(payload);
+    findings = completed.findings;
+    currentSummary = completed.summary;
+    currentScanId = completed.id;
     selectedId = findings[0]?.id ?? null;
-    const comparison = payload.comparison || {};
+    const comparison = completed.comparison || {};
     document.querySelector("#comparison-summary").textContent = `${comparison.fixedFindings || 0} fixed · ${comparison.newFindings || 0} new · ${comparison.unchangedFindings || 0} unchanged · score ${(comparison.scoreChange || 0) >= 0 ? "+" : ""}${comparison.scoreChange || 0}`;
     setProgress(100, "Rescan complete", 4);
     await loadHistory();
