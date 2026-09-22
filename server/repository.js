@@ -5,21 +5,44 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import { githubToken } from "./github.js";
 
+export function gitProcessEnvironment(overrides = {}) {
+  const allowed = [
+    "PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "GIT_SSL_CAINFO",
+  ];
+  const environment = {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
+    GIT_ALLOW_PROTOCOL: "https",
+  };
+  for (const name of allowed) if (process.env[name]) environment[name] = process.env[name];
+  return { ...environment, ...overrides };
+}
+
+function terminate(child) {
+  if (child.exitCode !== null) return;
+  child.kill("SIGKILL");
+  if (process.platform === "win32" && child.pid) {
+    const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { shell: false, windowsHide: true, stdio: "ignore" });
+    killer.unref();
+  }
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
       shell: false,
       windowsHide: true,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      ...(options.env ? { env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...options.env } } : {}),
+      env: gitProcessEnvironment(options.env),
     });
     let stdout = "";
     let stderr = "";
     const limit = 100_000;
     child.stdout.on("data", (chunk) => { if (stdout.length < limit) stdout += chunk; });
     child.stderr.on("data", (chunk) => { if (stderr.length < limit) stderr += chunk; });
-    const timer = setTimeout(() => child.kill(), options.timeoutMs ?? 90_000);
+    const timer = setTimeout(() => terminate(child), options.timeoutMs ?? 90_000);
     child.on("error", reject);
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -48,9 +71,6 @@ export async function cloneRepository(repository, timeoutMs) {
     if (Number(metadata.size || 0) > maximumRepositoryKb) throw new Error(`Repository size ${metadata.size} KB exceeds the configured ${maximumRepositoryKb} KB limit.`);
     if (metadata.archived && process.env.CHROLLO_ALLOW_ARCHIVED !== "true") throw new Error("Archived repositories are disabled by policy.");
     const gitEnvironment = {
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : os.devNull,
-      GIT_ALLOW_PROTOCOL: "https",
       GIT_CONFIG_COUNT: token ? "2" : "1",
       GIT_CONFIG_KEY_0: "http.sslBackend",
       GIT_CONFIG_VALUE_0: "openssl",

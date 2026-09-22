@@ -16,8 +16,9 @@ export class ScanStore {
     try {
       await fs.access(this.file);
     } catch {
-      await fs.writeFile(this.file, "[]\n", "utf8");
+      await fs.writeFile(this.file, "[]\n", { encoding: "utf8", mode: 0o600 });
     }
+    await fs.chmod(this.file, 0o600).catch(() => {});
   }
 
   async all() {
@@ -42,7 +43,7 @@ export class ScanStore {
   }
 
   async save(scan) {
-    this.queue = this.queue.then(async () => {
+    const operation = this.queue.catch(() => {}).then(async () => {
       const scans = await this.all();
       const index = scans.findIndex((item) => item.id === scan.id);
       if (index >= 0) scans[index] = scan;
@@ -52,6 +53,7 @@ export class ScanStore {
       const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
       const retained = scans.filter((item) => Date.parse(item.createdAt) >= cutoff).slice(0, 50);
       await fs.writeFile(temporary, `${JSON.stringify(retained, null, 2)}\n`, "utf8");
+      await fs.chmod(temporary, 0o600).catch(() => {});
       await fs.rename(temporary, this.file);
       if (this.supabaseUrl && this.supabaseKey) {
         try {
@@ -71,8 +73,41 @@ export class ScanStore {
         } catch (error) { this.lastRemoteError = error.message; }
       }
     });
-    await this.queue;
+    this.queue = operation.catch(() => {});
+    await operation;
     return scan;
+  }
+
+  async mutate(id, mutator) {
+    let result = null;
+    const operation = this.queue.catch(() => {}).then(async () => {
+      const scans = await this.all();
+      const scan = scans.find((item) => item.id === id);
+      if (!scan) return;
+      result = await mutator(scan);
+      const temporary = `${this.file}.${process.pid}.tmp`;
+      const retentionDays = Math.max(1, Number(process.env.CHROLLO_RETENTION_DAYS || 30));
+      const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+      const retained = scans.filter((item) => Date.parse(item.createdAt) >= cutoff).slice(0, 50);
+      await fs.writeFile(temporary, `${JSON.stringify(retained, null, 2)}\n`, "utf8");
+      await fs.chmod(temporary, 0o600).catch(() => {});
+      await fs.rename(temporary, this.file);
+      if (this.supabaseUrl && this.supabaseKey) {
+        try {
+          const response = await fetch(`${this.supabaseUrl}/rest/v1/chrollo_scans?on_conflict=id`, {
+            method: "POST",
+            headers: { apikey: this.supabaseKey, authorization: `Bearer ${this.supabaseKey}`, "content-type": "application/json", prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify([{ id: scan.id, created_at: scan.createdAt, repository_url: scan.repository.url, payload: scan }]),
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok) throw new Error(`Supabase returned HTTP ${response.status}`);
+          this.lastRemoteError = null;
+        } catch (error) { this.lastRemoteError = error.message; }
+      }
+    });
+    this.queue = operation.catch(() => {});
+    await operation;
+    return result;
   }
 
   status() {

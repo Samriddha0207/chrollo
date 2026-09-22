@@ -1,14 +1,36 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
-function execute(command, args, cwd, timeoutMs = 120_000) {
+export function scannerEnvironment(home) {
+  const allowed = [
+    "PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE",
+  ];
+  const environment = { NO_COLOR: "1", HOME: home, USERPROFILE: home, XDG_CACHE_HOME: path.join(home, "cache"), GIT_CONFIG_NOSYSTEM: "1" };
+  for (const name of allowed) if (process.env[name]) environment[name] = process.env[name];
+  return environment;
+}
+
+function terminate(child) {
+  if (child.exitCode !== null) return;
+  child.kill("SIGKILL");
+  if (process.platform === "win32" && child.pid) {
+    const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { shell: false, windowsHide: true, stdio: "ignore" });
+    killer.unref();
+  }
+}
+
+function execute(command, args, cwd, environment, timeoutMs = 120_000) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, shell: false, windowsHide: true, env: { ...process.env, NO_COLOR: "1" } });
+    const child = spawn(command, args, { cwd, shell: false, windowsHide: true, env: environment });
     let stdout = "";
     let stderr = "";
     const limit = 8_000_000;
     child.stdout.on("data", (chunk) => { if (stdout.length < limit) stdout += chunk; });
     child.stderr.on("data", (chunk) => { if (stderr.length < limit) stderr += chunk; });
-    const timer = setTimeout(() => child.kill(), timeoutMs);
+    const timer = setTimeout(() => terminate(child), timeoutMs);
     child.on("error", (error) => { clearTimeout(timer); resolve({ ok: false, error: error.message }); });
     child.on("close", (code) => { clearTimeout(timer); resolve({ ok: code === 0 || code === 1, code, stdout, stderr }); });
   });
@@ -39,8 +61,8 @@ function externalFinding({ id, level, title, tool, rule, file, line, explanation
   };
 }
 
-async function semgrep(root) {
-  const result = await execute("semgrep", ["scan", "--json", "--config", "auto", "--metrics=off", "--quiet", "."], root);
+async function semgrep(root, environment) {
+  const result = await execute("semgrep", ["scan", "--json", "--config", "auto", "--metrics=off", "--quiet", "."], root, environment);
   if (!result.ok || !result.stdout.trim()) return { available: !/ENOENT|not recognized/i.test(result.error || ""), findings: [] };
   try {
     const payload = JSON.parse(result.stdout);
@@ -59,8 +81,8 @@ async function semgrep(root) {
   } catch { return { available: true, findings: [] }; }
 }
 
-async function gitleaks(root) {
-  const result = await execute("gitleaks", ["detect", "--source", ".", "--no-git", "--report-format", "json", "--report-path", "-"], root);
+async function gitleaks(root, environment) {
+  const result = await execute("gitleaks", ["detect", "--source", ".", "--no-git", "--report-format", "json", "--report-path", "-"], root, environment);
   if (!result.ok || !result.stdout.trim()) return { available: !/ENOENT|not recognized/i.test(result.error || ""), findings: [] };
   try {
     const payload = JSON.parse(result.stdout);
@@ -79,8 +101,8 @@ async function gitleaks(root) {
   } catch { return { available: true, findings: [] }; }
 }
 
-async function osv(root) {
-  const result = await execute("osv-scanner", ["scan", "source", "-r", ".", "--format", "json"], root);
+async function osv(root, environment) {
+  const result = await execute("osv-scanner", ["scan", "source", "-r", ".", "--format", "json"], root, environment);
   if (!result.ok || !result.stdout.trim()) return { available: !/ENOENT|not recognized/i.test(result.error || ""), findings: [] };
   try {
     const payload = JSON.parse(result.stdout);
@@ -109,11 +131,17 @@ async function osv(root) {
 
 export async function runExternalScanners(root) {
   if (process.env.CHROLLO_EXTERNAL_SCANNERS !== "true") return { enabled: false, tools: [], findings: [] };
-  const results = await Promise.all([semgrep(root), gitleaks(root), osv(root)]);
-  const names = ["Semgrep", "Gitleaks", "OSV-Scanner"];
-  return {
-    enabled: true,
-    tools: results.map((result, index) => ({ name: names[index], available: result.available, findingCount: result.findings.length })),
-    findings: results.flatMap((result) => result.findings),
-  };
+  const isolatedHome = await fs.mkdtemp(path.join(os.tmpdir(), "chrollo-scanner-"));
+  try {
+    const environment = scannerEnvironment(isolatedHome);
+    const results = await Promise.all([semgrep(root, environment), gitleaks(root, environment), osv(root, environment)]);
+    const names = ["Semgrep", "Gitleaks", "OSV-Scanner"];
+    return {
+      enabled: true,
+      tools: results.map((result, index) => ({ name: names[index], available: result.available, findingCount: result.findings.length })),
+      findings: results.flatMap((result) => result.findings),
+    };
+  } finally {
+    await fs.rm(isolatedHome, { recursive: true, force: true });
+  }
 }

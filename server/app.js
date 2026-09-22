@@ -17,6 +17,10 @@ await loadEnv(path.join(projectRoot, ".env"));
 const staticRoot = path.join(projectRoot, "dist");
 const dataDirectory = process.env.CHROLLO_DATA_DIR || path.join(projectRoot, "data");
 const port = Number(process.env.PORT || 4173);
+const host = process.env.CHROLLO_HOST || "127.0.0.1";
+if (!["127.0.0.1", "::1", "localhost"].includes(host) && !process.env.CHROLLO_API_TOKEN) {
+  throw new Error("CHROLLO_API_TOKEN is required when CHROLLO_HOST is not a loopback address.");
+}
 const store = new ScanStore(dataDirectory);
 await store.initialize();
 await cleanupStaleClones();
@@ -29,7 +33,9 @@ const scanQueue = new ScanQueue(service, {
   maximumQueued: process.env.CHROLLO_MAX_QUEUED_SCANS || 20,
 });
 const requestWindows = new Map();
-const rateLimit = Number(process.env.CHROLLO_RATE_LIMIT || 30);
+const rateLimit = Number(process.env.CHROLLO_RATE_LIMIT || 120);
+const scanRateLimit = Number(process.env.CHROLLO_SCAN_RATE_LIMIT || 6);
+const remediationRequests = new Map();
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -44,22 +50,26 @@ function routeMatch(pathname, pattern) {
   return match ? match.slice(1).map(decodeURIComponent) : null;
 }
 
-function allowRequest(request) {
-  const key = request.socket.remoteAddress || "local";
+function allowRequest(request, url) {
+  const category = request.method === "POST" && (/^\/api\/scans$/.test(url.pathname) || /\/rescan$/.test(url.pathname)) ? "scan" : "api";
+  const key = `${request.socket.remoteAddress || "local"}:${category}`;
   const now = Date.now();
   const window = requestWindows.get(key) || { startedAt: now, count: 0 };
   if (now - window.startedAt > 60_000) { window.startedAt = now; window.count = 0; }
   window.count += 1;
   requestWindows.set(key, window);
-  return window.count <= rateLimit;
+  if (requestWindows.size > 1_000) for (const [entryKey, entry] of requestWindows) if (now - entry.startedAt > 120_000) requestWindows.delete(entryKey);
+  return window.count <= (category === "scan" ? scanRateLimit : rateLimit);
 }
 
 function authorized(request, url) {
   const expected = process.env.CHROLLO_API_TOKEN;
   if (!expected || url.pathname === "/api/health") return true;
   const supplied = request.headers.authorization?.replace(/^Bearer\s+/i, "") || request.headers["x-chrollo-token"];
-  if (!supplied || supplied.length !== expected.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+  if (!supplied) return false;
+  const suppliedDigest = crypto.createHash("sha256").update(String(supplied)).digest();
+  const expectedDigest = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(suppliedDigest, expectedDigest);
 }
 
 function validBrowserOrigin(request) {
@@ -100,7 +110,7 @@ async function handleApi(request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/health") {
     return sendJson(response, 200, {
       status: "ok",
-      version: "1.3.0",
+      version: "1.3.1",
       integrations: {
         ai: Boolean(process.env.GEMINI_API_KEY),
         github: githubConfigured(),
@@ -186,12 +196,25 @@ async function handleApi(request, response, url) {
     if (!scan || !finding) return sendJson(response, 404, { error: "Finding not found." });
     if (finding.decision !== "approve") return sendJson(response, 409, { error: "Approve the recommendation before creating a remediation pull request." });
     if (finding.remediationPullRequest) return sendJson(response, 200, finding.remediationPullRequest);
-    const pullRequest = await createRemediationPullRequest(scan, finding);
-    finding.remediationPullRequest = pullRequest;
-    scan.events ||= [];
-    scan.events.push({ type: "remediation_pull_request", findingId: finding.id, pullRequest, createdAt: new Date().toISOString() });
-    await store.save(scan);
-    return sendJson(response, 201, pullRequest);
+    const lockKey = `${scan.id}:${finding.id}`;
+    let operation = remediationRequests.get(lockKey);
+    const existingOperation = Boolean(operation);
+    if (!operation) {
+      operation = (async () => {
+        const pullRequest = await createRemediationPullRequest(scan, finding);
+        await store.mutate(scan.id, (current) => {
+          const currentFinding = current.findings.find((item) => item.id === finding.id);
+          if (!currentFinding) throw new Error("Finding no longer exists.");
+          currentFinding.remediationPullRequest = pullRequest;
+          current.events ||= [];
+          current.events.push({ type: "remediation_pull_request", findingId: finding.id, pullRequest, createdAt: new Date().toISOString() });
+        });
+        return pullRequest;
+      })();
+      remediationRequests.set(lockKey, operation);
+      void operation.finally(() => remediationRequests.delete(lockKey)).catch(() => {});
+    }
+    return sendJson(response, existingOperation ? 200 : 201, await operation);
   }
 
   return sendJson(response, 404, { error: "API route not found." });
@@ -239,7 +262,10 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname.startsWith("/api/") && hasRequestBody && ["POST", "PUT", "PATCH"].includes(request.method) && !String(request.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
       return sendJson(response, 415, { error: "State-changing API requests require application/json." });
     }
-    if (url.pathname.startsWith("/api/") && !allowRequest(request)) return sendJson(response, 429, { error: "Rate limit exceeded. Try again in one minute." });
+    if (url.pathname.startsWith("/api/") && !allowRequest(request, url)) {
+      response.setHeader("retry-after", "60");
+      return sendJson(response, 429, { error: "Rate limit exceeded. Try again in one minute." });
+    }
     if (url.pathname.startsWith("/api/")) await handleApi(request, response, url);
     else if (request.method === "GET" || request.method === "HEAD") await handleStatic(response, url);
     else sendJson(response, 405, { error: "Method not allowed." });
@@ -249,6 +275,6 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(port, "127.0.0.1", () => {
-  console.log(`Chrollo is running at http://127.0.0.1:${port}`);
+server.listen(port, host, () => {
+  console.log(`Chrollo is running at http://${host}:${port}`);
 });

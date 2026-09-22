@@ -75,18 +75,17 @@ export class AuditService {
   }
 
   async decide(scanIdValue, findingId, action) {
-    const scan = await this.store.get(scanIdValue);
-    if (!scan) return null;
-    const finding = scan.findings.find((item) => item.id === findingId);
-    if (!finding) return null;
-    finding.decision = action;
-    finding.decidedAt = new Date().toISOString();
-    finding.status = action === "reject" ? "dismissed" : "approved";
-    scan.events ||= [];
-    scan.events.push({ type: "finding_decision", findingId, action, createdAt: finding.decidedAt });
-    scan.summary.open = scan.findings.filter((item) => item.status === "open").length;
-    await this.store.save(scan);
-    return finding;
+    return this.store.mutate(scanIdValue, (scan) => {
+      const finding = scan.findings.find((item) => item.id === findingId);
+      if (!finding) return null;
+      finding.decision = action;
+      finding.decidedAt = new Date().toISOString();
+      finding.status = action === "reject" ? "dismissed" : "approved";
+      scan.events ||= [];
+      scan.events.push({ type: "finding_decision", findingId, action, createdAt: finding.decidedAt });
+      scan.summary.open = scan.findings.filter((item) => item.status === "open").length;
+      return structuredClone(finding);
+    });
   }
 
   async explain(scanIdValue, findingId) {
@@ -95,8 +94,12 @@ export class AuditService {
     if (!finding) return null;
     const explanation = await explainFinding(finding);
     if (explanation) {
-      finding.aiExplanation = explanation;
-      await this.store.save(scan);
+      return this.store.mutate(scanIdValue, (current) => {
+        const currentFinding = current.findings.find((item) => item.id === findingId);
+        if (!currentFinding) return null;
+        currentFinding.aiExplanation = explanation;
+        return structuredClone(currentFinding);
+      });
     }
     return finding;
   }

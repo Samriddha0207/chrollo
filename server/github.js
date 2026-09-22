@@ -60,7 +60,9 @@ export async function githubRequest(path, options = {}) {
   return payload;
 }
 
-function remediationDocument(scan, finding) {
+export function remediationDocument(scan, finding) {
+  const safeText = (value) => String(value || "").replace(/[<>]/g, (character) => character === "<" ? "&lt;" : "&gt;");
+  const codeBlock = (value) => String(value || "").split(/\r?\n/).map((line) => `    ${line}`).join("\n");
   return [
     "# Chrollo remediation plan",
     "",
@@ -72,21 +74,17 @@ function remediationDocument(scan, finding) {
     "",
     "## Finding",
     "",
-    finding.title,
+    safeText(finding.title),
     "",
-    finding.aiExplanation || finding.explanation,
+    safeText(finding.aiExplanation || finding.explanation),
     "",
     "## Evidence",
     "",
-    "```text",
-    finding.evidence,
-    "```",
+    codeBlock(finding.evidence),
     "",
     "## Recommended change",
     "",
-    "```diff",
-    ...(finding.patch || []),
-    "```",
+    codeBlock((finding.patch || []).join("\n")),
     "",
     "> Review and implement this recommendation before merging. Chrollo intentionally does not execute repository code.",
     "",

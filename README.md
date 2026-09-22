@@ -25,6 +25,8 @@ Chrollo is a repository security review workspace built by **Phantom Troupe** fo
 - Clone-disk, total scan-byte and individual file-size limits
 - Stable finding fingerprints for accurate comparisons after line changes
 - Same-origin write protection, structured request logs and runtime metrics
+- Secret-free environments and isolated home directories for external scanner processes
+- Atomic finding updates and duplicate-remediation suppression
 - Optional Gemini explanations when a key is explicitly configured
 - GitHub App or fine-grained token authentication for authorized private repositories
 - Draft remediation pull requests after reviewer approval
@@ -70,6 +72,7 @@ Chrollo runs available tools without executing repository code and merges their 
 Copy `.env.example` to `.env`. Chrollo loads this file automatically and never serves it to the browser.
 
 For an externally reachable API, set `CHROLLO_API_TOKEN` and have authenticated API clients send it as a bearer token. The built-in browser UI is intended for localhost or for deployment behind an identity-aware reverse proxy.
+Chrollo refuses to bind `CHROLLO_HOST` to a non-loopback address unless `CHROLLO_API_TOKEN` is configured. Scan creation has a stricter rate limit than read-only API polling.
 
 ### Gemini
 
