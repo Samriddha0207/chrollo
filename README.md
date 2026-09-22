@@ -4,7 +4,7 @@
 
 **Chrollo** is an open-source repository security workspace built by **Phantom Troupe** for HackSpire. Give it a GitHub URL and it creates an isolated snapshot, searches for security risks, normalizes the evidence, and turns noisy scanner output into a review that a developer can actually act on.
 
-### [Launch Chrollo →](https://chrollo-5rer9qee6-samriddhachaudhury-5891s-projects.vercel.app/)
+### [Launch Chrollo →](https://chrollo-eight.vercel.app/)
 
 ## From repository to decision
 
