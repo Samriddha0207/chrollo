@@ -73,6 +73,9 @@ function renderDetail() {
     return;
   }
   const state = finding.status === "open" ? finding.severity : "resolved";
+  const patch = Array.isArray(finding.patch) ? finding.patch : [];
+  const before = patch.filter((line) => String(line).startsWith("-")).map((line) => String(line).slice(1).trimStart()).join("\n") || finding.evidence || "No source excerpt is available for this finding.";
+  const after = patch.filter((line) => String(line).startsWith("+")).map((line) => String(line).slice(1).trimStart()).join("\n") || "Review the analysis above and apply a validated fix in the repository.";
   detail.innerHTML = `
     <div class="detail-header">
       <span class="severity ${state}">${escapeHtml(finding.status === "open" ? finding.severity : finding.status)}</span>
@@ -80,12 +83,16 @@ function renderDetail() {
       <p>${escapeHtml(finding.file)}:${finding.line} · ${escapeHtml(finding.rule)}</p>
     </div>
     <div class="detail-section"><h3>Analysis</h3><p>${escapeHtml(finding.aiExplanation || finding.explanation)}</p></div>
-    <div class="detail-section"><h3>Evidence</h3><pre class="code-block">${escapeHtml(finding.evidence)}</pre></div>
-    <div class="detail-section"><h3>Recommended change</h3><pre class="diff-block">${(finding.patch || []).map((line) => `<span class="${line.startsWith("+") ? "add" : line.startsWith("-") ? "remove" : ""}">${escapeHtml(line)}</span>`).join("\n")}</pre></div>
     <div class="detail-actions">
       <button class="action-button" id="reject-button" ${finding.status !== "open" ? "disabled" : ""}>Dismiss</button>
       <button class="action-button" id="explain-button" ${!integrations.ai || finding.status !== "open" ? "disabled" : ""}>Explain with AI</button>
       <button class="action-button approve" id="approve-button" ${finding.status !== "open" ? "disabled" : ""}>${finding.status === "approved" ? "Approved for remediation" : "Approve recommendation"}</button>
+      <section class="correction-panel" aria-label="Mistake and suggested correction">
+        <h3>Mistake and suggested correction</h3>
+        <div class="correction-example"><span class="correction-label mistake">Mistake</span><pre>${escapeHtml(before)}</pre></div>
+        <div class="correction-example"><span class="correction-label fix">Suggested fix</span><pre>${escapeHtml(after)}</pre></div>
+        <p>Review this example in context before changing the repository. Secret evidence may be redacted.</p>
+      </section>
       ${finding.remediationPullRequest
         ? `<a class="action-button pr-action" href="${escapeHtml(finding.remediationPullRequest.url)}" target="_blank" rel="noopener">Open draft PR #${finding.remediationPullRequest.number}</a>`
         : `<button class="action-button pr-action" id="pr-button" ${!integrations.github || finding.decision !== "approve" ? "disabled" : ""}>Create draft remediation PR</button>`}

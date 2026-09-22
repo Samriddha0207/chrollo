@@ -19,5 +19,6 @@ test("Vercel configuration routes API traffic to a bounded Node function", async
   assert.equal(configuration.functions["api/index.js"].maxDuration, 300);
   assert.equal(configuration.functions["api/index.js"].supportsCancellation, true);
   assert.ok(configuration.rewrites.some((rewrite) => rewrite.source === "/api/:path*" && rewrite.destination.includes("_chrollo_path")));
-  assert.ok(configuration.rewrites.some((rewrite) => rewrite.source === "/" && rewrite.destination === "/dist/index.html"));
+  assert.equal(configuration.outputDirectory, "dist");
+  assert.ok(!configuration.rewrites.some((rewrite) => rewrite.source === "/"));
 });
