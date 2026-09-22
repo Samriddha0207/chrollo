@@ -246,8 +246,8 @@ function gitLog(root, maximumCommits) {
   });
 }
 
-async function historySecretFindings(root) {
-  if (process.env.CHROLLO_HISTORY_SCAN === "false") return [];
+async function historySecretFindings(root, enabled = process.env.CHROLLO_HISTORY_SCAN !== "false") {
+  if (!enabled) return [];
   const history = await gitLog(root, Math.max(1, Math.min(200, Number(process.env.CHROLLO_HISTORY_COMMITS || 50))));
   const results = [];
   let file = "git-history";
@@ -306,7 +306,8 @@ export async function scanLocalRepository(root, options = {}) {
       for (const rule of multilineRules) if (rule.pattern.test(window)) findings.push(finding(rule, relative, index + 1, window, "Context scan"));
     }
   }
-  findings.push(...await historySecretFindings(root));
+  const historyEnabled = options.historyScan ?? process.env.CHROLLO_HISTORY_SCAN !== "false";
+  findings.push(...await historySecretFindings(root, historyEnabled));
   const unique = [...new Map(findings.map((item) => [`${item.rule}:${item.file}:${item.line}`, item])).values()];
   const score = Math.max(0, 100 - unique.reduce((total, item) => total + weights[item.severity], 0));
   return {
@@ -323,7 +324,7 @@ export async function scanLocalRepository(root, options = {}) {
       durationMs: Date.now() - started,
       truncated: files.length >= maximum || byteLimitReached,
       truncationReason: byteLimitReached ? "byte-limit" : files.length >= maximum ? "file-limit" : null,
-      scanners: ["Source scan", "Context scan", "Secret scan", "Git history", "OSV.dev"],
+      scanners: ["Source scan", "Context scan", "Secret scan", ...(historyEnabled ? ["Git history"] : []), "OSV.dev"],
     },
   };
 }

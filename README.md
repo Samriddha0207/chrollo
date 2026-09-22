@@ -1,6 +1,6 @@
 # Chrollo
 
-Chrollo is a repository security review workspace built by **Phantom Troupe** for HackSpire. It creates an isolated shallow clone of an authorized public GitHub repository, scans it without executing project code, normalizes the evidence, and records reviewer decisions.
+Chrollo is a repository security review workspace built by **Phantom Troupe** for HackSpire. Locally it creates an isolated shallow Git clone; on Vercel it downloads a commit-pinned GitHub archive. It scans the snapshot without executing project code, normalizes the evidence, and records reviewer decisions.
 
 ## What works
 
@@ -34,8 +34,10 @@ Chrollo is a repository security review workspace built by **Phantom Troupe** fo
 - Static demo fallback when the UI is opened without the Node service
 - Responsive review UI and WebMCP finding lookup
 - Docker support and automated tests
+- Native Vercel Function entry point and deployment configuration
+- Commit-pinned, size-limited GitHub archive acquisition for serverless deployments
 
-Chrollo never runs code from a scanned repository. Clones are stored in a random operating-system temporary directory and removed after each scan. Stale Chrollo clone directories are removed when the service starts.
+Chrollo never runs code from a scanned repository. Repository snapshots are stored in a random operating-system temporary directory and removed after each scan. Stale local clone directories are removed when the Node service starts.
 
 ## Requirements
 
@@ -49,13 +51,49 @@ Chrollo never runs code from a scanned repository. Clones are stored in a random
 npm start
 ```
 
-Open <http://127.0.0.1:4173>. No package installation is required because the application uses only Node.js built-ins.
+Open <http://127.0.0.1:4173>.
 
 For development with automatic restart:
 
 ```powershell
 npm run dev
 ```
+
+## Deploy to Vercel
+
+The repository includes `vercel.json` and `api/index.js`; do not set a custom framework preset or output directory in the Vercel dashboard.
+
+1. Create a Supabase project and run [`supabase/schema.sql`](supabase/schema.sql) in its SQL editor.
+2. Import this GitHub repository into Vercel.
+3. Add the environment variables below for Production and Preview.
+4. Enable Fluid Compute in the Vercel project settings and leave the Function duration at 300 seconds.
+5. Deploy, then open `/api/health`. A production-ready response reports `runtime: "vercel-function"` and persistence with `configured: true`.
+
+Required for durable operation:
+
+```text
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-server-only-service-role-key
+```
+
+Recommended for private repositories and higher GitHub API limits:
+
+```text
+GITHUB_TOKEN=your-fine-grained-token
+```
+
+Copy the remaining limits from [`.env.vercel.example`](.env.vercel.example). Never add `.env` files or service-role keys to Git. Vercel automatically sets `VERCEL=1`, which makes Chrollo:
+
+- export an HTTP function instead of opening a listening port;
+- run scans within the initiating request instead of relying on an in-memory background queue;
+- download a commit-pinned GitHub archive instead of invoking a system Git binary;
+- use `/tmp` only as disposable working space;
+- cap returned findings to stay below the Function response limit;
+- disable host-installed executable scanners and Git-history scanning.
+
+If Supabase is not configured, individual scans still work, but history, exports, decisions and rescans are not reliable across Function invocations. `/api/health` reports this state as `degraded`.
+
+For access control, use Vercel Deployment Protection or an identity-aware proxy. `CHROLLO_API_TOKEN` is intended for API-only deployments because exposing a shared bearer token in browser JavaScript would not be secure.
 
 ## Optional production scanners
 

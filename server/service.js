@@ -21,6 +21,7 @@ export class AuditService {
         maxFiles: this.maxFiles,
         maxBytes: Number(process.env.CHROLLO_MAX_SCAN_BYTES || 50_000_000),
         maxFileBytes: Number(process.env.CHROLLO_MAX_FILE_BYTES || 512_000),
+        historyScan: clone.historyAvailable,
       });
       onProgress(75, "Running configured external scanners");
       const external = await runExternalScanners(clone.directory);
@@ -33,6 +34,17 @@ export class AuditService {
         result.summary.score = Math.max(0, 100 - result.findings.reduce((total, item) => total + weights[item.severity], 0));
         result.summary.scanners.push(...external.tools.filter((tool) => tool.available).map((tool) => tool.name));
       }
+      const severityRank = { critical: 0, high: 1, medium: 2, low: 3 };
+      const totalFindings = result.findings.length;
+      const maximumFindings = Math.max(1, Number(process.env.CHROLLO_MAX_FINDINGS || (process.env.VERCEL ? 500 : 1_000)));
+      result.findings.sort((left, right) => (severityRank[left.severity] ?? 4) - (severityRank[right.severity] ?? 4));
+      if (result.findings.length > maximumFindings) result.findings = result.findings.slice(0, maximumFindings);
+      result.summary.totalFindings = totalFindings;
+      result.summary.findingsReturned = result.findings.length;
+      result.summary.findingsTruncated = totalFindings > result.findings.length;
+      result.summary.open = result.findings.length;
+      result.summary.critical = result.findings.filter((item) => item.severity === "critical").length;
+      result.summary.high = result.findings.filter((item) => item.severity === "high").length;
       const scan = {
         id,
         createdAt,
@@ -48,6 +60,7 @@ export class AuditService {
           sizeKb: clone.sizeKb,
           cloneBytes: clone.cloneBytes,
           private: clone.private,
+          acquisition: clone.acquisition,
         },
         ...result,
         externalScanners: external.tools,

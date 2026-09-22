@@ -26,6 +26,7 @@ let selectedId = findings[0].id;
 let activeFilter = "all";
 let currentScanId = null;
 let backendAvailable = false;
+let backendRuntime = "static";
 let integrations = { ai: false, github: false, persistence: { configured: false }, externalScanners: false };
 let repositoryName = "OWASP / NodeGoat";
 let currentSummary = demoSummary();
@@ -235,7 +236,9 @@ function setProgress(percent, label, phaseIndex) {
 
 async function runScan(repository) {
   scanButton.disabled = true;
-  document.querySelector("#form-message").textContent = backendAvailable ? "Cloning into an isolated temporary directory. This can take up to 90 seconds." : "Static demo mode: start the Node server for live repository scans.";
+  document.querySelector("#form-message").textContent = backendAvailable
+    ? backendRuntime === "vercel-function" ? "Downloading a commit-pinned repository snapshot. Keep this page open while the scan runs." : "Cloning into an isolated temporary directory. This can take up to 90 seconds."
+    : "Static demo mode: start the Node server for live repository scans.";
   const phases = [[12, "Validating repository", 0], [35, "Creating an isolated shallow clone", 1], [62, "Scanning source, secrets and dependencies", 2], [84, "Normalizing evidence and severity", 3]];
   let phase = 0;
   const timer = window.setInterval(() => { if (phase < phases.length) setProgress(...phases[phase++]); }, 700);
@@ -384,12 +387,13 @@ async function detectBackend() {
     const response = await fetch("/api/health", { signal: AbortSignal.timeout(1500) });
     const payload = await response.json();
     backendAvailable = response.ok;
+    backendRuntime = payload.runtime || "node-server";
     integrations = payload.integrations || integrations;
     const enabled = [integrations.ai && "AI", integrations.github && "GitHub", integrations.persistence?.configured && "Supabase"].filter(Boolean);
     document.querySelector("#mode-label").textContent = enabled.length ? `Live + ${enabled.join(" + ")}` : "Live scanner";
-    document.querySelector("#form-message").textContent = integrations.github
-      ? "Ready for public or authorized private GitHub repositories."
-      : "Ready for a live scan. Configure GitHub authentication to scan private repositories.";
+    document.querySelector("#form-message").textContent = payload.warnings?.length
+      ? payload.warnings[0]
+      : integrations.github ? "Ready for public or authorized private GitHub repositories." : "Ready for a live scan. Configure GitHub authentication to scan private repositories.";
     await loadHistory();
   } catch {
     document.querySelector("#mode-label").textContent = "Static demo";

@@ -1,4 +1,8 @@
 .sites-runtime/
+.vercel/
+.vercel-cli-*/
+.npm-cache/
+node_modules/
 *.log
 data/
 .env

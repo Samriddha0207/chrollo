@@ -2,6 +2,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { ScanStore } from "./store.js";
 import { AuditService } from "./service.js";
@@ -14,16 +15,17 @@ import { ScanQueue } from "./jobs.js";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.dirname(here);
 await loadEnv(path.join(projectRoot, ".env"));
+const isVercel = Boolean(process.env.VERCEL);
 const staticRoot = path.join(projectRoot, "dist");
-const dataDirectory = process.env.CHROLLO_DATA_DIR || path.join(projectRoot, "data");
+const dataDirectory = process.env.CHROLLO_DATA_DIR || (isVercel ? path.join(os.tmpdir(), "chrollo-data") : path.join(projectRoot, "data"));
 const port = Number(process.env.PORT || 4173);
 const host = process.env.CHROLLO_HOST || "127.0.0.1";
-if (!["127.0.0.1", "::1", "localhost"].includes(host) && !process.env.CHROLLO_API_TOKEN) {
+if (!isVercel && !["127.0.0.1", "::1", "localhost"].includes(host) && !process.env.CHROLLO_API_TOKEN) {
   throw new Error("CHROLLO_API_TOKEN is required when CHROLLO_HOST is not a loopback address.");
 }
 const store = new ScanStore(dataDirectory);
 await store.initialize();
-await cleanupStaleClones();
+if (!isVercel) await cleanupStaleClones();
 const service = new AuditService(store, {
   timeoutMs: process.env.CHROLLO_SCAN_TIMEOUT_MS,
   maxFiles: process.env.CHROLLO_MAX_FILES,
@@ -52,7 +54,8 @@ function routeMatch(pathname, pattern) {
 
 function allowRequest(request, url) {
   const category = request.method === "POST" && (/^\/api\/scans$/.test(url.pathname) || /\/rescan$/.test(url.pathname)) ? "scan" : "api";
-  const key = `${request.socket.remoteAddress || "local"}:${category}`;
+  const forwarded = isVercel ? String(request.headers["x-forwarded-for"] || "").split(",")[0].trim() : "";
+  const key = `${forwarded || request.socket.remoteAddress || "local"}:${category}`;
   const now = Date.now();
   const window = requestWindows.get(key) || { startedAt: now, count: 0 };
   if (now - window.startedAt > 60_000) { window.startedAt = now; window.count = 0; }
@@ -78,7 +81,11 @@ function validBrowserOrigin(request) {
   if (!origin) return true;
   try {
     const source = new URL(origin);
-    const expected = new URL(`http://${request.headers.host || "localhost"}`);
+    const allowed = String(process.env.CHROLLO_ALLOWED_ORIGINS || "").split(",").map((item) => item.trim()).filter(Boolean);
+    if (allowed.includes(source.origin)) return true;
+    const forwardedProtocol = String(request.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+    const protocol = isVercel && ["http", "https"].includes(forwardedProtocol) ? forwardedProtocol : request.socket.encrypted ? "https" : "http";
+    const expected = new URL(`${protocol}://${request.headers.host || "localhost"}`);
     return source.protocol === expected.protocol && source.host === expected.host;
   } catch { return false; }
 }
@@ -108,16 +115,22 @@ function toSarif(scan) {
 
 async function handleApi(request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/health") {
+    const persistence = store.status();
     return sendJson(response, 200, {
-      status: "ok",
-      version: "1.3.1",
+      status: isVercel && !persistence.configured ? "degraded" : "ok",
+      version: "1.4.0",
+      runtime: isVercel ? "vercel-function" : "node-server",
       integrations: {
         ai: Boolean(process.env.GEMINI_API_KEY),
         github: githubConfigured(),
-        persistence: store.status(),
+        persistence,
         externalScanners: process.env.CHROLLO_EXTERNAL_SCANNERS === "true",
       },
       queue: scanQueue.stats(),
+      warnings: [
+        ...(isVercel && !persistence.configured ? ["SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for durable scan history on Vercel."] : []),
+        ...(isVercel && process.env.CHROLLO_EXTERNAL_SCANNERS === "true" ? ["Host-installed external scanners are not available in the Vercel Function runtime."] : []),
+      ],
     });
   }
 
@@ -140,6 +153,10 @@ async function handleApi(request, response, url) {
   if (request.method === "POST" && url.pathname === "/api/scans") {
     const body = await readJson(request);
     const repository = validateGithubUrl(body.repositoryUrl);
+    if (isVercel) {
+      const scan = await service.scan(repository);
+      return sendJson(response, 201, scan);
+    }
     const job = scanQueue.enqueue(repository);
     response.setHeader("location", `/api/jobs/${job.id}`);
     return sendJson(response, 202, job);
@@ -168,6 +185,10 @@ async function handleApi(request, response, url) {
     const prior = await store.get(rescanRoute[0]);
     if (!prior) return sendJson(response, 404, { error: "Scan not found." });
     const repository = validateGithubUrl(prior.repository.url);
+    if (isVercel) {
+      const scan = await service.scan(repository, prior.id);
+      return sendJson(response, 201, scan);
+    }
     const job = scanQueue.enqueue(repository, prior.id);
     response.setHeader("location", `/api/jobs/${job.id}`);
     return sendJson(response, 202, job);
@@ -245,7 +266,7 @@ async function handleStatic(response, url) {
   }
 }
 
-const server = http.createServer(async (request, response) => {
+export async function requestHandler(request, response) {
   const requestId = crypto.randomUUID();
   const startedAt = Date.now();
   response.setHeader("x-request-id", requestId);
@@ -273,8 +294,12 @@ const server = http.createServer(async (request, response) => {
     const status = error.statusCode || (/valid|supported|form|too large|JSON|limit/.test(error.message) ? 400 : 500);
     sendJson(response, status, { error: publicError(error) });
   }
-});
+}
 
-server.listen(port, host, () => {
+const server = http.createServer(requestHandler);
+const directExecution = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (directExecution) server.listen(port, host, () => {
   console.log(`Chrollo is running at http://${host}:${port}`);
 });
+
+export default requestHandler;

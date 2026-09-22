@@ -21,6 +21,35 @@ export class ScanStore {
     await fs.chmod(this.file, 0o600).catch(() => {});
   }
 
+  async localAll() {
+    const raw = await fs.readFile(this.file, "utf8");
+    return JSON.parse(raw).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async writeLocal(scans) {
+    const retentionDays = Math.max(1, Number(process.env.CHROLLO_RETENTION_DAYS || 30));
+    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    const retained = scans.filter((item) => Date.parse(item.createdAt) >= cutoff).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50);
+    const temporary = `${this.file}.${process.pid}.tmp`;
+    await fs.writeFile(temporary, `${JSON.stringify(retained, null, 2)}\n`, "utf8");
+    await fs.chmod(temporary, 0o600).catch(() => {});
+    await fs.rename(temporary, this.file);
+  }
+
+  async upsertRemote(scan) {
+    if (!this.supabaseUrl || !this.supabaseKey) return;
+    try {
+      const response = await fetch(`${this.supabaseUrl}/rest/v1/chrollo_scans?on_conflict=id`, {
+        method: "POST",
+        headers: { apikey: this.supabaseKey, authorization: `Bearer ${this.supabaseKey}`, "content-type": "application/json", prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify([{ id: scan.id, created_at: scan.createdAt, repository_url: scan.repository.url, payload: scan }]),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw new Error(`Supabase returned HTTP ${response.status}`);
+      this.lastRemoteError = null;
+    } catch (error) { this.lastRemoteError = error.message; }
+  }
+
   async all() {
     if (this.supabaseUrl && this.supabaseKey) {
       try {
@@ -33,45 +62,32 @@ export class ScanStore {
         return (await response.json()).map((row) => row.payload);
       } catch (error) { this.lastRemoteError = error.message; }
     }
-    const raw = await fs.readFile(this.file, "utf8");
-    const scans = JSON.parse(raw);
-    return scans.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return this.localAll();
   }
 
   async get(id) {
-    return (await this.all()).find((scan) => scan.id === id) ?? null;
+    if (this.supabaseUrl && this.supabaseKey) {
+      try {
+        const response = await fetch(`${this.supabaseUrl}/rest/v1/chrollo_scans?id=eq.${encodeURIComponent(id)}&select=payload&limit=1`, {
+          headers: { apikey: this.supabaseKey, authorization: `Bearer ${this.supabaseKey}` },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) throw new Error(`Supabase returned HTTP ${response.status}`);
+        this.lastRemoteError = null;
+        return (await response.json())[0]?.payload ?? null;
+      } catch (error) { this.lastRemoteError = error.message; }
+    }
+    return (await this.localAll()).find((scan) => scan.id === id) ?? null;
   }
 
   async save(scan) {
     const operation = this.queue.catch(() => {}).then(async () => {
-      const scans = await this.all();
+      const scans = await this.localAll();
       const index = scans.findIndex((item) => item.id === scan.id);
       if (index >= 0) scans[index] = scan;
       else scans.unshift(scan);
-      const temporary = `${this.file}.${process.pid}.tmp`;
-      const retentionDays = Math.max(1, Number(process.env.CHROLLO_RETENTION_DAYS || 30));
-      const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-      const retained = scans.filter((item) => Date.parse(item.createdAt) >= cutoff).slice(0, 50);
-      await fs.writeFile(temporary, `${JSON.stringify(retained, null, 2)}\n`, "utf8");
-      await fs.chmod(temporary, 0o600).catch(() => {});
-      await fs.rename(temporary, this.file);
-      if (this.supabaseUrl && this.supabaseKey) {
-        try {
-          const response = await fetch(`${this.supabaseUrl}/rest/v1/chrollo_scans?on_conflict=id`, {
-            method: "POST",
-            headers: {
-              apikey: this.supabaseKey,
-              authorization: `Bearer ${this.supabaseKey}`,
-              "content-type": "application/json",
-              prefer: "resolution=merge-duplicates,return=minimal",
-            },
-            body: JSON.stringify([{ id: scan.id, created_at: scan.createdAt, repository_url: scan.repository.url, payload: scan }]),
-            signal: AbortSignal.timeout(10_000),
-          });
-          if (!response.ok) throw new Error(`Supabase returned HTTP ${response.status}`);
-          this.lastRemoteError = null;
-        } catch (error) { this.lastRemoteError = error.message; }
-      }
+      await this.writeLocal(scans);
+      await this.upsertRemote(scan);
     });
     this.queue = operation.catch(() => {});
     await operation;
@@ -81,29 +97,14 @@ export class ScanStore {
   async mutate(id, mutator) {
     let result = null;
     const operation = this.queue.catch(() => {}).then(async () => {
-      const scans = await this.all();
-      const scan = scans.find((item) => item.id === id);
+      const scan = await this.get(id);
       if (!scan) return;
       result = await mutator(scan);
-      const temporary = `${this.file}.${process.pid}.tmp`;
-      const retentionDays = Math.max(1, Number(process.env.CHROLLO_RETENTION_DAYS || 30));
-      const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-      const retained = scans.filter((item) => Date.parse(item.createdAt) >= cutoff).slice(0, 50);
-      await fs.writeFile(temporary, `${JSON.stringify(retained, null, 2)}\n`, "utf8");
-      await fs.chmod(temporary, 0o600).catch(() => {});
-      await fs.rename(temporary, this.file);
-      if (this.supabaseUrl && this.supabaseKey) {
-        try {
-          const response = await fetch(`${this.supabaseUrl}/rest/v1/chrollo_scans?on_conflict=id`, {
-            method: "POST",
-            headers: { apikey: this.supabaseKey, authorization: `Bearer ${this.supabaseKey}`, "content-type": "application/json", prefer: "resolution=merge-duplicates,return=minimal" },
-            body: JSON.stringify([{ id: scan.id, created_at: scan.createdAt, repository_url: scan.repository.url, payload: scan }]),
-            signal: AbortSignal.timeout(10_000),
-          });
-          if (!response.ok) throw new Error(`Supabase returned HTTP ${response.status}`);
-          this.lastRemoteError = null;
-        } catch (error) { this.lastRemoteError = error.message; }
-      }
+      const scans = await this.localAll();
+      const index = scans.findIndex((item) => item.id === scan.id);
+      if (index >= 0) scans[index] = scan; else scans.unshift(scan);
+      await this.writeLocal(scans);
+      await this.upsertRemote(scan);
     });
     this.queue = operation.catch(() => {});
     await operation;
@@ -114,7 +115,8 @@ export class ScanStore {
     return {
       configured: Boolean(this.supabaseUrl && this.supabaseKey),
       active: Boolean(this.supabaseUrl && this.supabaseKey && !this.lastRemoteError),
-      fallback: "local-json",
+      durable: Boolean(this.supabaseUrl && this.supabaseKey),
+      fallback: process.env.VERCEL ? "ephemeral-json" : "local-json",
       error: this.lastRemoteError,
     };
   }

@@ -131,6 +131,11 @@ async function osv(root, environment) {
 
 export async function runExternalScanners(root) {
   if (process.env.CHROLLO_EXTERNAL_SCANNERS !== "true") return { enabled: false, tools: [], findings: [] };
+  if (process.env.VERCEL) return {
+    enabled: false,
+    tools: ["Semgrep", "Gitleaks", "OSV-Scanner"].map((name) => ({ name, available: false, findingCount: 0, reason: "Use a container worker or Vercel Sandbox for executable scanners." })),
+    findings: [],
+  };
   const isolatedHome = await fs.mkdtemp(path.join(os.tmpdir(), "chrollo-scanner-"));
   try {
     const environment = scannerEnvironment(isolatedHome);

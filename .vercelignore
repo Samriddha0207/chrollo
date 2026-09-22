@@ -1,0 +1,8 @@
+.env
+.git
+.npm-cache
+data
+test
+test-data*
+*.log
+Dockerfile
