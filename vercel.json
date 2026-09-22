@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "outputDirectory": "dist",
   "functions": {
     "api/index.js": {
       "maxDuration": 300,
@@ -8,10 +9,7 @@
     }
   },
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/index?_chrollo_path=:path*" },
-    { "source": "/", "destination": "/dist/index.html" },
-    { "source": "/app.js", "destination": "/dist/app.js" },
-    { "source": "/styles.css", "destination": "/dist/styles.css" }
+    { "source": "/api/:path*", "destination": "/api/index?_chrollo_path=:path*" }
   ],
   "headers": [
     {
