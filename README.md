@@ -2,7 +2,7 @@
 
 > Turn a GitHub repository into an explainable security review—without executing a single line of its code.
 
-**Chrollo** is an open-source repository security workspace built by **Phantom Troupe** for HackSpire. Give it a GitHub URL and it creates an isolated snapshot, searches for security risks, normalizes the evidence, and turns noisy scanner output into a review that a developer can actually act on.
+**Chrollo** combines lightweight static security checks, dependency advisory lookups, and human-reviewed remediation workflows. Gemini explains selected findings, while rescans compare detection results against earlier snapshots.
 
 ### [Launch Chrollo →](https://chrollo-eight.vercel.app/)
 
